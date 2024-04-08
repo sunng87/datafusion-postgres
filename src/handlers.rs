@@ -3,6 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
+use datafusion::sql::parser::DFParser;
+use datafusion::sql::planner::SqlToRel;
+use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{
@@ -15,7 +18,7 @@ use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 
 use tokio::sync::Mutex;
 
-use crate::datatypes::encode_dataframe;
+use crate::datatypes::{self, into_pg_type};
 
 pub(crate) struct DfSessionService {
     session_context: Arc<Mutex<SessionContext>>,
@@ -57,7 +60,7 @@ impl SimpleQueryHandler for DfSessionService {
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            let resp = encode_dataframe(df).await?;
+            let resp = datatypes::encode_dataframe(df).await?;
             Ok(vec![Response::Query(resp)])
         } else {
             Ok(vec![Response::Error(Box::new(ErrorInfo::new(
@@ -69,14 +72,27 @@ impl SimpleQueryHandler for DfSessionService {
     }
 }
 
-pub(crate) struct Parser;
+pub(crate) struct Parser {
+    service: Arc<DfSessionService>,
+}
 
 #[async_trait]
 impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
-    async fn parse_sql(&self, sql: &str, types: &[Type]) -> PgWireResult<Self::Statement> {
-        todo!()
+    async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
+        let context = self.service.session_context.lock().await;
+        let state = context.state();
+
+        let logical_plan = state
+            .create_logical_plan(sql)
+            .await
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let optimised = state
+            .optimize(&logical_plan)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        Ok(optimised)
     }
 }
 
@@ -93,24 +109,46 @@ impl ExtendedQueryHandler for DfSessionService {
 
     async fn do_describe_statement<C>(
         &self,
-        client: &mut C,
+        _client: &mut C,
         target: &StoredStatement<Self::Statement>,
     ) -> PgWireResult<DescribeStatementResponse>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        todo!()
+        let plan = &target.statement;
+
+        let schema = plan.schema();
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref())?;
+        let params = plan
+            .get_parameter_types()
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        let mut param_types = Vec::with_capacity(params.len());
+        for param_type in params.into_values() {
+            if let Some(datatype) = param_type {
+                let pgtype = into_pg_type(&datatype)?;
+                param_types.push(pgtype);
+            } else {
+                param_types.push(Type::UNKNOWN);
+            }
+        }
+
+        Ok(DescribeStatementResponse::new(param_types, fields))
     }
 
     async fn do_describe_portal<C>(
         &self,
-        client: &mut C,
+        _client: &mut C,
         target: &Portal<Self::Statement>,
     ) -> PgWireResult<DescribePortalResponse>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        todo!()
+        let plan = &target.statement.statement;
+        let schema = plan.schema();
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref())?;
+
+        Ok(DescribePortalResponse::new(fields))
     }
 
     async fn do_query<'a, C>(
