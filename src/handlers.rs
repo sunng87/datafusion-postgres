@@ -1,16 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
-use datafusion::sql::parser::DFParser;
-use datafusion::sql::planner::SqlToRel;
-use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
-use pgwire::api::results::{
-    DescribePortalResponse, DescribeStatementResponse, FieldInfo, QueryResponse, Response, Tag,
-};
+use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response, Tag};
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, Type};
@@ -22,12 +18,18 @@ use crate::datatypes::{self, into_pg_type};
 
 pub(crate) struct DfSessionService {
     session_context: Arc<Mutex<SessionContext>>,
+    parser: Arc<Parser>,
 }
 
 impl DfSessionService {
     pub fn new() -> DfSessionService {
+        let session_context = Arc::new(Mutex::new(SessionContext::new()));
+        let parser = Arc::new(Parser {
+            session_context: session_context.clone(),
+        });
         DfSessionService {
-            session_context: Arc::new(Mutex::new(SessionContext::new())),
+            session_context,
+            parser,
         }
     }
 }
@@ -73,7 +75,7 @@ impl SimpleQueryHandler for DfSessionService {
 }
 
 pub(crate) struct Parser {
-    service: Arc<DfSessionService>,
+    session_context: Arc<Mutex<SessionContext>>,
 }
 
 #[async_trait]
@@ -81,7 +83,7 @@ impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
     async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
-        let context = self.service.session_context.lock().await;
+        let context = self.session_context.lock().await;
         let state = context.state();
 
         let logical_plan = state
@@ -102,9 +104,8 @@ impl ExtendedQueryHandler for DfSessionService {
 
     type QueryParser = Parser;
 
-    #[doc = " Get a reference to associated `QueryParser` implementation"]
     fn query_parser(&self) -> Arc<Self::QueryParser> {
-        todo!()
+        self.parser.clone()
     }
 
     async fn do_describe_statement<C>(
@@ -123,6 +124,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
+        dbg!(&params);
         let mut param_types = Vec::with_capacity(params.len());
         for param_type in params.into_values() {
             if let Some(datatype) = param_type {
@@ -153,13 +155,38 @@ impl ExtendedQueryHandler for DfSessionService {
 
     async fn do_query<'a, C>(
         &self,
-        client: &mut C,
+        _client: &mut C,
         portal: &'a Portal<Self::Statement>,
-        max_rows: usize,
+        _max_rows: usize,
     ) -> PgWireResult<Response<'a>>
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        todo!()
+        let plan = &portal.statement.statement;
+
+        let param_values = datatypes::deserialize_parameters(
+            portal,
+            &plan
+                .get_parameter_types()
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+                .values()
+                .map(|v| v.as_ref())
+                .collect::<Vec<Option<&DataType>>>(),
+        )?;
+
+        let plan = plan
+            .replace_params_with_values(&param_values)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        let dataframe = self
+            .session_context
+            .lock()
+            .await
+            .execute_logical_plan(plan)
+            .await
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+        let resp = datatypes::encode_dataframe(dataframe).await?;
+        Ok(Response::Query(resp))
     }
 }

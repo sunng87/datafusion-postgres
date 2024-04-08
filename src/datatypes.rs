@@ -6,9 +6,11 @@ use datafusion::arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::DFSchema;
+use datafusion::common::{DFSchema, ParamValues};
 use datafusion::prelude::*;
+use datafusion::scalar::ScalarValue;
 use futures::{stream, StreamExt};
+use pgwire::api::portal::Portal;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
@@ -215,8 +217,6 @@ fn encode_value(
     Ok(())
 }
 
-//pub(crate) fn
-
 pub(crate) fn df_schema_to_pg_fields(schema: &DFSchema) -> PgWireResult<Vec<FieldInfo>> {
     schema
         .fields()
@@ -269,4 +269,87 @@ pub(crate) async fn encode_dataframe<'a>(df: DataFrame) -> PgWireResult<QueryRes
         .flatten();
 
     Ok(QueryResponse::new(fields, pg_row_stream))
+}
+
+/// Deserialize client provided parameter data.
+///
+/// First we try to use the type information from `pg_type_hint`, which is
+/// provided by the client.
+/// If the type is empty or unknown, we fallback to datafusion inferenced type
+/// from `inferenced_types`.
+/// An error will be raised when neither sources can provide type information.
+pub(crate) fn deserialize_parameters<S>(
+    portal: &Portal<S>,
+    inferenced_types: &[Option<&DataType>],
+) -> PgWireResult<ParamValues>
+where
+    S: Clone,
+{
+    fn get_pg_type(
+        pg_type_hint: Option<&Type>,
+        inferenced_type: Option<&DataType>,
+    ) -> PgWireResult<Type> {
+        if let Some(ty) = pg_type_hint {
+            Ok(ty.clone())
+        } else if let Some(infer_type) = inferenced_type {
+            into_pg_type(infer_type).map(|t| t.clone())
+        } else {
+            Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                "FATAL".to_string(),
+                "XX000".to_string(),
+                "Unknown parameter type".to_string(),
+            ))))
+        }
+    }
+
+    let param_len = portal.parameter_len();
+    let mut deserialized_params = Vec::with_capacity(param_len);
+    for i in 0..param_len {
+        let pg_type = get_pg_type(
+            portal.statement.parameter_types.get(i),
+            inferenced_types.get(i).and_then(|v| v.to_owned()),
+        )?;
+        match pg_type {
+            // enumerate all supported parameter types and deserialize the
+            // type to ScalarValue
+            Type::BOOL => {
+                let value = portal.parameter::<bool>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Boolean(value));
+            }
+            Type::INT2 => {
+                let value = portal.parameter::<i16>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Int16(value));
+            }
+            Type::INT4 => {
+                let value = portal.parameter::<i32>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Int32(value));
+            }
+            Type::INT8 => {
+                let value = portal.parameter::<i64>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Int64(value));
+            }
+            Type::TEXT | Type::VARCHAR => {
+                let value = portal.parameter::<String>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Utf8(value));
+            }
+            Type::FLOAT4 => {
+                let value = portal.parameter::<f32>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Float32(value));
+            }
+            Type::FLOAT8 => {
+                let value = portal.parameter::<f64>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Float64(value));
+            }
+            // TODO: add more types like Timestamp, Datetime, Bytea
+            _ => {
+                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                    "FATAL".to_string(),
+                    "XX000".to_string(),
+                    format!("Unsupported parameter type: {}", pg_type),
+                ))));
+            }
+        }
+    }
+
+    Ok(ParamValues::List(deserialized_params))
 }
