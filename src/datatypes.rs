@@ -6,6 +6,7 @@ use datafusion::arrow::datatypes::{
     UInt32Type, UInt64Type, UInt8Type,
 };
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::DFSchema;
 use datafusion::prelude::*;
 use futures::{stream, StreamExt};
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse};
@@ -214,24 +215,27 @@ fn encode_value(
     Ok(())
 }
 
+//pub(crate) fn
+
+pub(crate) fn df_schema_to_pg_fields(schema: &DFSchema) -> PgWireResult<Vec<FieldInfo>> {
+    schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let pg_type = into_pg_type(f.data_type())?;
+            Ok(FieldInfo::new(
+                f.name().into(),
+                None,
+                None,
+                pg_type,
+                FieldFormat::Text,
+            ))
+        })
+        .collect::<PgWireResult<Vec<FieldInfo>>>()
+}
+
 pub(crate) async fn encode_dataframe<'a>(df: DataFrame) -> PgWireResult<QueryResponse<'a>> {
-    let schema = df.schema();
-    let fields = Arc::new(
-        schema
-            .fields()
-            .iter()
-            .map(|f| {
-                let pg_type = into_pg_type(f.data_type())?;
-                Ok(FieldInfo::new(
-                    f.name().into(),
-                    None,
-                    None,
-                    pg_type,
-                    FieldFormat::Text,
-                ))
-            })
-            .collect::<PgWireResult<Vec<FieldInfo>>>()?,
-    );
+    let fields = Arc::new(df_schema_to_pg_fields(df.schema())?);
 
     let recordbatch_stream = df
         .execute_stream()
