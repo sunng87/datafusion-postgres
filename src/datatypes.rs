@@ -292,7 +292,7 @@ where
         if let Some(ty) = pg_type_hint {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
-            into_pg_type(infer_type).map(|t| t.clone())
+            into_pg_type(infer_type)
         } else {
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "FATAL".to_string(),
