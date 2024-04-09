@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::NaiveDateTime;
 use datafusion::arrow::array::{Array, BooleanArray, ListArray, PrimitiveArray, StringArray};
 use datafusion::arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
@@ -339,6 +340,13 @@ where
             Type::FLOAT8 => {
                 let value = portal.parameter::<f64>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Float64(value));
+            }
+            Type::TIMESTAMP => {
+                let value = portal.parameter::<NaiveDateTime>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::TimestampMicrosecond(
+                    value.map(|t| t.and_utc().timestamp_micros()),
+                    None,
+                ));
             }
             // TODO: add more types like Timestamp, Datetime, Bytea
             _ => {
