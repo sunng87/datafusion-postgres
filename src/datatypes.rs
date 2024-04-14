@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use chrono::NaiveDateTime;
-use datafusion::arrow::array::{Array, BooleanArray, ListArray, PrimitiveArray, StringArray};
+use chrono::{NaiveDate, NaiveDateTime};
+use datafusion::arrow::array::{
+    Array, BooleanArray, Date32Array, ListArray, PrimitiveArray, StringArray,
+};
 use datafusion::arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
@@ -150,6 +152,13 @@ fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
         .value(idx)
 }
 
+fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
+    arr.as_any()
+        .downcast_ref::<Date32Array>()
+        .unwrap()
+        .value_as_date(idx)
+}
+
 fn get_utf8_list_value(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<String>> {
     let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
     list_arr
@@ -179,6 +188,7 @@ fn encode_value(
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
+        DataType::Date32 => encoder.encode_field(&get_date32_value(arr, idx))?,
         DataType::List(field) => match field.data_type() {
             DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
             DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
