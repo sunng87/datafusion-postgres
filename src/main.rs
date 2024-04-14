@@ -23,7 +23,7 @@ struct Opt {
     json_tables: Vec<String>,
 }
 
-fn parse_table_def(table_def: &String) -> (&str, &str) {
+fn parse_table_def(table_def: &str) -> (&str, &str) {
     table_def
         .split_once(':')
         .expect("Use this pattern to register table: table_name:file_path")
@@ -34,18 +34,18 @@ async fn main() {
     let opts = Opt::from_args();
 
     let session_context = SessionContext::new();
-    for (table_name, table_path) in opts.csv_tables.iter().map(parse_table_def) {
+    for (table_name, table_path) in opts.csv_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_csv(table_name, table_path, CsvReadOptions::default())
             .await
-            .expect(&format!("Failed to register table: {table_name}"));
+            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
         println!("Loaded {} as table {}", table_path, table_name);
     }
-    for (table_name, table_path) in opts.json_tables.iter().map(parse_table_def) {
+    for (table_name, table_path) in opts.json_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_json(table_name, table_path, NdJsonReadOptions::default())
             .await
-            .expect(&format!("Failed to register table: {table_name}"));
+            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
