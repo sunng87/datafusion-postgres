@@ -6,24 +6,23 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use pgwire::api::portal::Portal;
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
-use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response, Tag};
+use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response};
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, Type};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
-
 use tokio::sync::Mutex;
 
 use crate::datatypes::{self, into_pg_type};
 
 pub(crate) struct DfSessionService {
-    session_context: Arc<Mutex<SessionContext>>,
+    pub(crate) session_context: Arc<Mutex<SessionContext>>,
     parser: Arc<Parser>,
 }
 
 impl DfSessionService {
-    pub fn new() -> DfSessionService {
-        let session_context = Arc::new(Mutex::new(SessionContext::new()));
+    pub fn new(session_context: SessionContext) -> DfSessionService {
+        let session_context = Arc::new(Mutex::new(session_context));
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
         });
@@ -44,18 +43,7 @@ impl SimpleQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        if query.starts_with("LOAD") {
-            let command = query.trim_end();
-            let command = command.strip_suffix(';').unwrap_or(command);
-            let args = command.split(' ').collect::<Vec<&str>>();
-            let table_name = args[2];
-            let json_path = args[1];
-            let ctx = self.session_context.lock().await;
-            ctx.register_json(table_name, json_path, NdJsonReadOptions::default())
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            Ok(vec![Response::Execution(Tag::new("OK").with_rows(1))])
-        } else if query.to_uppercase().starts_with("SELECT") {
+        if query.to_uppercase().starts_with("SELECT") {
             let ctx = self.session_context.lock().await;
             let df = ctx
                 .sql(query)
@@ -68,7 +56,7 @@ impl SimpleQueryHandler for DfSessionService {
             Ok(vec![Response::Error(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
                 "XX000".to_owned(),
-                "Datafusion is a readonly execution engine. To load data, call\nLOAD json_file_path table_name;".to_owned(),
+                "Only select statements is supported by this tool.".to_owned(),
             )))])
         }
     }
