@@ -1,13 +1,8 @@
 use std::sync::Arc;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::array::{
-    Array, BooleanArray, Date32Array, ListArray, PrimitiveArray, StringArray,
-};
-use datafusion::arrow::datatypes::{
-    DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
-};
+use datafusion::arrow::array::*;
+use datafusion::arrow::datatypes::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{DFSchema, ParamValues};
 use datafusion::prelude::*;
@@ -159,6 +154,68 @@ fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
         .value_as_date(idx)
 }
 
+fn get_date64_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
+    arr.as_any()
+        .downcast_ref::<Date64Array>()
+        .unwrap()
+        .value_as_date(idx)
+}
+
+fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<Time32SecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<Time32MillisecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_time64_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<Time64MicrosecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<Time64NanosecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_timestamp_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<TimestampSecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_timestamp_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<TimestampMillisecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_timestamp_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
+fn get_timestamp_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    arr.as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .unwrap()
+        .value_as_datetime(idx)
+}
+
 fn get_utf8_list_value(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<String>> {
     let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
     list_arr
@@ -189,6 +246,33 @@ fn encode_value(
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
         DataType::Date32 => encoder.encode_field(&get_date32_value(arr, idx))?,
+        DataType::Date64 => encoder.encode_field(&get_date64_value(arr, idx))?,
+        DataType::Time32(unit) => match unit {
+            TimeUnit::Second => encoder.encode_field(&get_time32_second_value(arr, idx))?,
+            TimeUnit::Millisecond => {
+                encoder.encode_field(&get_time32_millisecond_value(arr, idx))?
+            }
+            _ => {}
+        },
+        DataType::Time64(unit) => match unit {
+            TimeUnit::Microsecond => {
+                encoder.encode_field(&get_time64_microsecond_value(arr, idx))?
+            }
+            TimeUnit::Nanosecond => encoder.encode_field(&get_time64_nanosecond_value(arr, idx))?,
+            _ => {}
+        },
+        DataType::Timestamp(unit, _) => match unit {
+            TimeUnit::Second => encoder.encode_field(&get_timestamp_second_value(arr, idx))?,
+            TimeUnit::Millisecond => {
+                encoder.encode_field(&get_timestamp_millisecond_value(arr, idx))?
+            }
+            TimeUnit::Microsecond => {
+                encoder.encode_field(&get_timestamp_microsecond_value(arr, idx))?
+            }
+            TimeUnit::Nanosecond => {
+                encoder.encode_field(&get_timestamp_nanosecond_value(arr, idx))?
+            }
+        },
         DataType::List(field) => match field.data_type() {
             DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
             DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
@@ -202,6 +286,8 @@ fn encode_value(
             DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
             DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
             DataType::Utf8 => encoder.encode_field(&get_utf8_list_value(arr, idx))?,
+
+            // TODO: more types
             list_type => {
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "ERROR".to_owned(),
