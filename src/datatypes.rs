@@ -233,6 +233,7 @@ fn encode_value(
     idx: usize,
 ) -> PgWireResult<()> {
     match arr.data_type() {
+        DataType::Null => encoder.encode_field(&None::<i8>)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx))?,
         DataType::Int8 => encoder.encode_field(&get_i8_value(arr, idx))?,
         DataType::Int16 => encoder.encode_field(&get_i16_value(arr, idx))?,
@@ -274,6 +275,7 @@ fn encode_value(
             }
         },
         DataType::List(field) => match field.data_type() {
+            DataType::Null => encoder.encode_field(&None::<i8>)?,
             DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
             DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
             DataType::Int16 => encoder.encode_field(&get_i16_list_value(arr, idx))?,
