@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::execution::options::{CsvReadOptions, NdJsonReadOptions};
+use datafusion::execution::options::{ArrowReadOptions, CsvReadOptions, NdJsonReadOptions};
 use datafusion::prelude::SessionContext;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::{MakeHandler, StatelessMakeHandler};
@@ -21,6 +21,8 @@ struct Opt {
     csv_tables: Vec<String>,
     #[structopt(short)]
     json_tables: Vec<String>,
+    #[structopt(short)]
+    arrow_tables: Vec<String>,
 }
 
 fn parse_table_def(table_def: &str) -> (&str, &str) {
@@ -34,6 +36,7 @@ async fn main() {
     let opts = Opt::from_args();
 
     let session_context = SessionContext::new();
+
     for (table_name, table_path) in opts.csv_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_csv(table_name, table_path, CsvReadOptions::default())
@@ -41,9 +44,22 @@ async fn main() {
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
         println!("Loaded {} as table {}", table_path, table_name);
     }
+
     for (table_name, table_path) in opts.json_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_json(table_name, table_path, NdJsonReadOptions::default())
+            .await
+            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        println!("Loaded {} as table {}", table_path, table_name);
+    }
+
+    for (table_name, table_path) in opts
+        .arrow_tables
+        .iter()
+        .map(|s| parse_table_def(s.as_ref()))
+    {
+        session_context
+            .register_arrow(table_name, table_path, ArrowReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
         println!("Loaded {} as table {}", table_path, table_name);
