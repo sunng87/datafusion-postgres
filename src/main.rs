@@ -14,13 +14,16 @@ mod handlers;
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "datafusion-postgres",
-    about = "A postgres interface for datatfusion"
+    about = "A postgres interface for datatfusion. Serve any CSV/JSON/Arrow files as tables."
 )]
 struct Opt {
+    /// CSV files to register as table, using syntax `table_name:file_path`
     #[structopt(short)]
     csv_tables: Vec<String>,
+    /// JSON files to register as table, using syntax `table_name:file_path`
     #[structopt(short)]
     json_tables: Vec<String>,
+    /// Arrow files to register as table, using syntax `table_name:file_path`
     #[structopt(short)]
     arrow_tables: Vec<String>,
 }
