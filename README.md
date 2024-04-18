@@ -10,9 +10,9 @@ project.
 ## Usage
 
 At the moment, this tools is designed as a command-line application that serves
-any JSON/CSV/Arrow files as table, and expose them via Postgres compatible
-protocol, with which you can connect using psql or language drivers to execute
-`SELECT` queries against them.
+any JSON/CSV/Arrow/Parquet/Avro files as table, and expose them via Postgres
+compatible protocol, with which you can connect using psql or language drivers
+to execute `SELECT` queries against them.
 
 ```
 datafusion-postgres 0.1.0
@@ -26,9 +26,11 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -a <arrow-tables>...        Arrow files to register as table, using syntax `table_name:file_path`
-    -c <csv-tables>...          CSV files to register as table, using syntax `table_name:file_path`
-    -j <json-tables>...         JSON files to register as table, using syntax `table_name:file_path`
+        --arrow <arrow-tables>...        Arrow files to register as table, using syntax `table_name:file_path`
+        --avro <avro-tables>...          Avro files to register as table, using syntax `table_name:file_path`
+        --csv <csv-tables>...            CSV files to register as table, using syntax `table_name:file_path`
+        --json <json-tables>...          JSON files to register as table, using syntax `table_name:file_path`
+        --parquet <parquet-tables>...    Parquet files to register as table, using syntax `table_name:file_path`
 ```
 
 For example, we use this command to host `ETTm1.csv` dataset as table `ettm1`.
