@@ -1,5 +1,8 @@
 # datafusion-postgres
 
+Serving any CSV/JSON/Parquet/Arrow/Avro data files as Postgres tables, with
+Datafusion.
+
 This project is to add a [postgresql compatible access
 layer](https://github.com/sunng87/pgwire) to the [Apache
 Datafusion](https://github.com/apache/arrow-datafusion) query engine.
