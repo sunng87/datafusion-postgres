@@ -163,6 +163,7 @@ impl ExtendedQueryHandler for DfSessionService {
         )?;
 
         let plan = plan
+            .clone()
             .replace_params_with_values(&param_values)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
