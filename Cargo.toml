@@ -7,7 +7,7 @@ rust-version = "1.73"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pgwire = "0.22"
+pgwire = "0.23"
 datafusion = "39"
 futures = "0.3"
 async-trait = "0.1"
