@@ -8,8 +8,8 @@ use datafusion::common::{DFSchema, ParamValues};
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use futures::{stream, StreamExt};
-use pgwire::api::portal::Portal;
-use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse};
+use pgwire::api::portal::{Format, Portal};
+use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 
@@ -316,25 +316,32 @@ fn encode_value(
     Ok(())
 }
 
-pub(crate) fn df_schema_to_pg_fields(schema: &DFSchema) -> PgWireResult<Vec<FieldInfo>> {
+pub(crate) fn df_schema_to_pg_fields(
+    schema: &DFSchema,
+    format: &Format,
+) -> PgWireResult<Vec<FieldInfo>> {
     schema
         .fields()
         .iter()
-        .map(|f| {
+        .enumerate()
+        .map(|(idx, f)| {
             let pg_type = into_pg_type(f.data_type())?;
             Ok(FieldInfo::new(
                 f.name().into(),
                 None,
                 None,
                 pg_type,
-                FieldFormat::Text,
+                format.format_for(idx),
             ))
         })
         .collect::<PgWireResult<Vec<FieldInfo>>>()
 }
 
-pub(crate) async fn encode_dataframe<'a>(df: DataFrame) -> PgWireResult<QueryResponse<'a>> {
-    let fields = Arc::new(df_schema_to_pg_fields(df.schema())?);
+pub(crate) async fn encode_dataframe<'a>(
+    df: DataFrame,
+    format: &Format,
+) -> PgWireResult<QueryResponse<'a>> {
+    let fields = Arc::new(df_schema_to_pg_fields(df.schema(), format)?);
 
     let recordbatch_stream = df
         .execute_stream()

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
-use pgwire::api::portal::Portal;
+use pgwire::api::portal::{Format, Portal};
 use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response};
 use pgwire::api::stmt::QueryParser;
@@ -50,7 +50,7 @@ impl SimpleQueryHandler for DfSessionService {
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            let resp = datatypes::encode_dataframe(df).await?;
+            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
             Ok(vec![Response::Query(resp)])
         } else {
             Ok(vec![Response::Error(Box::new(ErrorInfo::new(
@@ -107,7 +107,7 @@ impl ExtendedQueryHandler for DfSessionService {
         let plan = &target.statement;
 
         let schema = plan.schema();
-        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref())?;
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
         let params = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -135,8 +135,9 @@ impl ExtendedQueryHandler for DfSessionService {
         C: ClientInfo + Unpin + Send + Sync,
     {
         let plan = &target.statement.statement;
+        let format = &target.result_column_format;
         let schema = plan.schema();
-        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref())?;
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), format)?;
 
         Ok(DescribePortalResponse::new(fields))
     }
@@ -175,7 +176,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let resp = datatypes::encode_dataframe(dataframe).await?;
+        let resp = datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
 }
