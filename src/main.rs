@@ -5,7 +5,8 @@ use datafusion::execution::options::{
 };
 use datafusion::prelude::SessionContext;
 use pgwire::api::auth::noop::NoopStartupHandler;
-use pgwire::api::{MakeHandler, StatelessMakeHandler};
+use pgwire::api::copy::NoopCopyHandler;
+use pgwire::api::PgWireHandlerFactory;
 use pgwire::tokio::process_socket;
 use structopt::StructOpt;
 use tokio::net::TcpListener;
@@ -40,6 +41,31 @@ fn parse_table_def(table_def: &str) -> (&str, &str) {
     table_def
         .split_once(':')
         .expect("Use this pattern to register table: table_name:file_path")
+}
+
+struct HandlerFactory(Arc<handlers::DfSessionService>);
+
+impl PgWireHandlerFactory for HandlerFactory {
+    type StartupHandler = NoopStartupHandler;
+    type SimpleQueryHandler = handlers::DfSessionService;
+    type ExtendedQueryHandler = handlers::DfSessionService;
+    type CopyHandler = NoopCopyHandler;
+
+    fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
+        self.0.clone()
+    }
+
+    fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
+        self.0.clone()
+    }
+
+    fn startup_handler(&self) -> Arc<Self::StartupHandler> {
+        Arc::new(NoopStartupHandler)
+    }
+
+    fn copy_handler(&self) -> Arc<Self::CopyHandler> {
+        Arc::new(NoopCopyHandler)
+    }
 }
 
 #[tokio::main]
@@ -96,27 +122,17 @@ async fn main() {
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
-    let processor = Arc::new(StatelessMakeHandler::new(Arc::new(
-        handlers::DfSessionService::new(session_context),
-    )));
-    let authenticator = Arc::new(StatelessMakeHandler::new(Arc::new(NoopStartupHandler)));
+    let factory = Arc::new(HandlerFactory(Arc::new(handlers::DfSessionService::new(
+        session_context,
+    ))));
 
     let server_addr = "127.0.0.1:5432";
     let listener = TcpListener::bind(server_addr).await.unwrap();
     println!("Listening to {}", server_addr);
     loop {
         let incoming_socket = listener.accept().await.unwrap();
-        let authenticator_ref = authenticator.make();
-        let processor_ref = processor.make();
-        tokio::spawn(async move {
-            process_socket(
-                incoming_socket.0,
-                None,
-                authenticator_ref,
-                processor_ref.clone(),
-                processor_ref,
-            )
-            .await
-        });
+        let factory_ref = factory.clone();
+
+        tokio::spawn(async move { process_socket(incoming_socket.0, None, factory_ref).await });
     }
 }
