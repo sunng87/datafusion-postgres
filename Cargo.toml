@@ -8,7 +8,7 @@ rust-version = "1.73"
 
 [dependencies]
 pgwire = "0.23"
-datafusion = "39"
+datafusion = { version = "39", features = ["avro"] }
 futures = "0.3"
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
