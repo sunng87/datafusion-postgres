@@ -1,0 +1,14 @@
+[package]
+name = "datafusion-postgres-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.73"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pgwire = { workspace = true }
+datafusion = { workspace = true, default-features = true, features = ["avro"] }
+tokio = { workspace = true, features = ["full"] }
+datafusion-postgres = { path = "../datafusion-postgres" }
+structopt = { version = "0.3", default-features = false }
