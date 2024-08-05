@@ -1,5 +1,5 @@
 [workspace]
-
+resolver = "2"
 members = ["datafusion-postgres", "datafusion-postgres-cli"]
 
 [workspace.dependencies]
