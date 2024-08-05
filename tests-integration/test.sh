@@ -3,7 +3,7 @@
 set -e
 
 cargo build
-./target/debug/datafusion-postgres --csv delhi:tests-integration/delhiclimate.csv &
+./target/debug/datafusion-postgres-cli --csv delhi:tests-integration/delhiclimate.csv &
 PID=$!
 sleep 3
 python tests-integration/test.py

@@ -4,15 +4,10 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::SessionContext;
-use pgwire::api::auth::noop::NoopStartupHandler;
-use pgwire::api::copy::NoopCopyHandler;
-use pgwire::api::PgWireHandlerFactory;
+use datafusion_postgres::{DfSessionService, HandlerFactory};
 use pgwire::tokio::process_socket;
 use structopt::StructOpt;
 use tokio::net::TcpListener;
-
-mod datatypes;
-mod handlers;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -41,31 +36,6 @@ fn parse_table_def(table_def: &str) -> (&str, &str) {
     table_def
         .split_once(':')
         .expect("Use this pattern to register table: table_name:file_path")
-}
-
-struct HandlerFactory(Arc<handlers::DfSessionService>);
-
-impl PgWireHandlerFactory for HandlerFactory {
-    type StartupHandler = NoopStartupHandler;
-    type SimpleQueryHandler = handlers::DfSessionService;
-    type ExtendedQueryHandler = handlers::DfSessionService;
-    type CopyHandler = NoopCopyHandler;
-
-    fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
-        self.0.clone()
-    }
-
-    fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
-        self.0.clone()
-    }
-
-    fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        Arc::new(NoopStartupHandler)
-    }
-
-    fn copy_handler(&self) -> Arc<Self::CopyHandler> {
-        Arc::new(NoopCopyHandler)
-    }
 }
 
 #[tokio::main]
@@ -122,7 +92,7 @@ async fn main() {
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
-    let factory = Arc::new(HandlerFactory(Arc::new(handlers::DfSessionService::new(
+    let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
         session_context,
     ))));
 
