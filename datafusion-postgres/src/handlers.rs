@@ -13,7 +13,6 @@ use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, PgWireHandlerFactory, Type};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
-use tokio::sync::Mutex;
 
 use crate::datatypes::{self, into_pg_type};
 
@@ -43,13 +42,13 @@ impl PgWireHandlerFactory for HandlerFactory {
 }
 
 pub struct DfSessionService {
-    session_context: Arc<Mutex<SessionContext>>,
+    session_context: Arc<SessionContext>,
     parser: Arc<Parser>,
 }
 
 impl DfSessionService {
     pub fn new(session_context: SessionContext) -> DfSessionService {
-        let session_context = Arc::new(Mutex::new(session_context));
+        let session_context = Arc::new(session_context);
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
         });
@@ -71,7 +70,7 @@ impl SimpleQueryHandler for DfSessionService {
         C: ClientInfo + Unpin + Send + Sync,
     {
         if query.to_uppercase().starts_with("SELECT") {
-            let ctx = self.session_context.lock().await;
+            let ctx = &self.session_context;
             let df = ctx
                 .sql(query)
                 .await
@@ -90,7 +89,7 @@ impl SimpleQueryHandler for DfSessionService {
 }
 
 pub struct Parser {
-    session_context: Arc<Mutex<SessionContext>>,
+    session_context: Arc<SessionContext>,
 }
 
 #[async_trait]
@@ -98,7 +97,7 @@ impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
     async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
-        let context = self.session_context.lock().await;
+        let context = &self.session_context;
         let state = context.state();
 
         let logical_plan = state
@@ -197,8 +196,6 @@ impl ExtendedQueryHandler for DfSessionService {
 
         let dataframe = self
             .session_context
-            .lock()
-            .await
             .execute_logical_plan(plan)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;

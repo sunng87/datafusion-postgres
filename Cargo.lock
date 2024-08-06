@@ -1157,7 +1157,6 @@ dependencies = [
  "datafusion",
  "futures",
  "pgwire",
- "tokio",
 ]
 
 [[package]]
