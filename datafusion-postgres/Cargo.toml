@@ -3,6 +3,15 @@ name = "datafusion-postgres"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.76"
+description = "Exporting datafusion query engine with postgres wire protocol"
+authors = ["Ning Sun <sunng@pm.me>"]
+license = "Apache-2.0"
+keywords = ["database", "postgresql"]
+homepage = "https://github.com/sunng87/datafusion-postgres/"
+repository = "https://github.com/sunng87/datafusion-postgres/"
+documentation = "https://docs.rs/crate/datafusion-postgres/"
+readme = "../README.md"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
