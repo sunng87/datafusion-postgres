@@ -12,7 +12,7 @@ use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Re
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, PgWireHandlerFactory, Type};
-use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::error::{PgWireError, PgWireResult};
 
 use crate::datatypes::{self, into_pg_type};
 
@@ -69,22 +69,14 @@ impl SimpleQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        if query.to_uppercase().starts_with("SELECT") {
-            let ctx = &self.session_context;
-            let df = ctx
-                .sql(query)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let ctx = &self.session_context;
+        let df = ctx
+            .sql(query)
+            .await
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            Ok(vec![Response::Query(resp)])
-        } else {
-            Ok(vec![Response::Error(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                "Only select statements is supported by this tool.".to_owned(),
-            )))])
-        }
+        let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+        Ok(vec![Response::Query(resp)])
     }
 }
 
@@ -138,7 +130,6 @@ impl ExtendedQueryHandler for DfSessionService {
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        dbg!(&params);
         let mut param_types = Vec::with_capacity(params.len());
         for param_type in params.into_values() {
             if let Some(datatype) = param_type {
