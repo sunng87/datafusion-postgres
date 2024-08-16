@@ -30,6 +30,12 @@ struct Opt {
     /// Avro files to register as table, using syntax `table_name:file_path`
     #[structopt(long("avro"))]
     avro_tables: Vec<String>,
+    /// Port the server listens to, default to 5432
+    #[structopt(short, default_value = "5432")]
+    port: u16,
+    /// Host address the server listens to, default to 127.0.0.1
+    #[structopt(long("host"), default_value = "127.0.0.1")]
+    host: String,
 }
 
 fn parse_table_def(table_def: &str) -> (&str, &str) {
@@ -96,8 +102,8 @@ async fn main() {
         session_context,
     ))));
 
-    let server_addr = "127.0.0.1:5432";
-    let listener = TcpListener::bind(server_addr).await.unwrap();
+    let server_addr = format!("{}:{}", opts.host, opts.port);
+    let listener = TcpListener::bind(&server_addr).await.unwrap();
     println!("Listening to {}", server_addr);
     loop {
         let incoming_socket = listener.accept().await.unwrap();
