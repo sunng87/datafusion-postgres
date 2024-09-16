@@ -1189,9 +1189,9 @@ dependencies = [
 
 [[package]]
 name = "derive-new"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d150dea618e920167e5973d70ae6ece4385b7164e0d799fe7c122dd0a5d912ad"
+checksum = "2cdc8d50f426189eef89dac62fabfa0abb27d5cc008f25bf4156a0203325becc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1612,6 +1612,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29c15563dc2726973df627357ce0c9ddddbea194836909d655df6a75d2cf296d"
 dependencies = [
  "wasm-bindgen",
+]
+
+[[package]]
+name = "lazy-regex"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d8e41c97e6bc7ecb552016274b99fbb5d035e8de288c582d9b933af6677bfda"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex-lite",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76e1d8b05d672c53cb9c7b920bbba8783845ae4f0b076e02a3db1d02c81b4163"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.72",
 ]
 
 [[package]]
@@ -2064,9 +2087,9 @@ dependencies = [
 
 [[package]]
 name = "pgwire"
-version = "0.24.1"
+version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b397fac991bd03fa10618cfc16659b523d7a14e8609835dd9d06b6071fc90b00"
+checksum = "ed4ca46dd335b3a030d977be54dfe121b1b9fe22aa8bbd69161ac2434524fc68"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2075,6 +2098,7 @@ dependencies = [
  "derive-new",
  "futures",
  "hex",
+ "lazy-regex",
  "md5",
  "postgres-types",
  "rand",
