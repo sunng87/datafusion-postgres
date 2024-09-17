@@ -10,12 +10,24 @@ Datafusion](https://github.com/apache/arrow-datafusion) query engine.
 It was originally an example of the [pgwire](https://github.com/sunng87/pgwire)
 project.
 
+## Roadmap
+
+This project is in its very early stage, feel free to join the development by
+picking up unfinished items.
+
+- [x] datafusion-postgres as a CLI tool
+- [x] datafusion-postgres as a library
+- [ ] datafusion information schema: a postgres compatible `information_schema`
+- [ ] datafusion pg catalog: a postgres compatible `pg_catalog`
+- [ ] data type mapping between arrow and postgres: in progress
+- [ ] additional postgres functions for datafusion
+
 ## Usage
 
-At the moment, this tools is designed as a command-line application that serves
-any JSON/CSV/Arrow/Parquet/Avro files as table, and expose them via Postgres
-compatible protocol, with which you can connect using psql or language drivers
-to execute `SELECT` queries against them.
+As a command-line application, this tool serves any JSON/CSV/Arrow/Parquet/Avro
+files as table, and expose them via Postgres compatible protocol, with which you
+can connect using psql or language drivers to execute `SELECT` queries against
+them.
 
 ```
 datafusion-postgres 0.1.0
