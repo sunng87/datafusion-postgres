@@ -21,34 +21,52 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         DataType::Int16 | DataType::UInt16 => Type::INT2,
         DataType::Int32 | DataType::UInt32 => Type::INT4,
         DataType::Int64 | DataType::UInt64 => Type::INT8,
-        DataType::Timestamp(_, _) => Type::TIMESTAMP,
+        DataType::Timestamp(_, tz) => {
+            if tz.is_some() {
+                Type::TIMESTAMPTZ
+            } else {
+                Type::TIMESTAMP
+            }
+        }
         DataType::Time32(_) | DataType::Time64(_) => Type::TIME,
         DataType::Date32 | DataType::Date64 => Type::DATE,
-        DataType::Binary => Type::BYTEA,
-        DataType::Float32 => Type::FLOAT4,
+        DataType::Interval(_) => Type::INTERVAL,
+        DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary => Type::BYTEA,
+        DataType::Float16 | DataType::Float32 => Type::FLOAT4,
         DataType::Float64 => Type::FLOAT8,
         DataType::Utf8 => Type::VARCHAR,
-        DataType::List(field) => match field.data_type() {
-            DataType::Boolean => Type::BOOL_ARRAY,
-            DataType::Int8 | DataType::UInt8 => Type::CHAR_ARRAY,
-            DataType::Int16 | DataType::UInt16 => Type::INT2_ARRAY,
-            DataType::Int32 | DataType::UInt32 => Type::INT4_ARRAY,
-            DataType::Int64 | DataType::UInt64 => Type::INT8_ARRAY,
-            DataType::Timestamp(_, _) => Type::TIMESTAMP_ARRAY,
-            DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
-            DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
-            DataType::Binary => Type::BYTEA_ARRAY,
-            DataType::Float32 => Type::FLOAT4_ARRAY,
-            DataType::Float64 => Type::FLOAT8_ARRAY,
-            DataType::Utf8 => Type::VARCHAR_ARRAY,
-            list_type => {
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                    "ERROR".to_owned(),
-                    "XX000".to_owned(),
-                    format!("Unsupported List Datatype {list_type}"),
-                ))));
+        DataType::LargeUtf8 => Type::TEXT,
+        DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
+            match field.data_type() {
+                DataType::Boolean => Type::BOOL_ARRAY,
+                DataType::Int8 | DataType::UInt8 => Type::CHAR_ARRAY,
+                DataType::Int16 | DataType::UInt16 => Type::INT2_ARRAY,
+                DataType::Int32 | DataType::UInt32 => Type::INT4_ARRAY,
+                DataType::Int64 | DataType::UInt64 => Type::INT8_ARRAY,
+                DataType::Timestamp(_, tz) => {
+                    if tz.is_some() {
+                        Type::TIMESTAMPTZ_ARRAY
+                    } else {
+                        Type::TIMESTAMP_ARRAY
+                    }
+                }
+                DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
+                DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
+                DataType::Interval(_) => Type::INTERVAL_ARRAY,
+                DataType::FixedSizeBinary(_) | DataType::Binary => Type::BYTEA_ARRAY,
+                DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
+                DataType::Float64 => Type::FLOAT8_ARRAY,
+                DataType::Utf8 => Type::VARCHAR_ARRAY,
+                DataType::LargeUtf8 => Type::TEXT_ARRAY,
+                list_type => {
+                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "XX000".to_owned(),
+                        format!("Unsupported List Datatype {list_type}"),
+                    ))));
+                }
             }
-        },
+        }
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -143,6 +161,27 @@ get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
 fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
     arr.as_any()
         .downcast_ref::<StringArray>()
+        .unwrap()
+        .value(idx)
+}
+
+fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
+    arr.as_any()
+        .downcast_ref::<LargeStringArray>()
+        .unwrap()
+        .value(idx)
+}
+
+fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
+    arr.as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap()
+        .value(idx)
+}
+
+fn get_large_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
+    arr.as_any()
+        .downcast_ref::<LargeBinaryArray>()
         .unwrap()
         .value(idx)
 }
@@ -246,6 +285,9 @@ fn encode_value(
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
+        DataType::LargeUtf8 => encoder.encode_field(&get_large_utf8_value(arr, idx))?,
+        DataType::Binary => encoder.encode_field(&get_binary_value(arr, idx))?,
+        DataType::LargeBinary => encoder.encode_field(&get_large_binary_value(arr, idx))?,
         DataType::Date32 => encoder.encode_field(&get_date32_value(arr, idx))?,
         DataType::Date64 => encoder.encode_field(&get_date64_value(arr, idx))?,
         DataType::Time32(unit) => match unit {
@@ -262,45 +304,77 @@ fn encode_value(
             TimeUnit::Nanosecond => encoder.encode_field(&get_time64_nanosecond_value(arr, idx))?,
             _ => {}
         },
-        DataType::Timestamp(unit, _) => match unit {
-            TimeUnit::Second => encoder.encode_field(&get_timestamp_second_value(arr, idx))?,
+        DataType::Timestamp(unit, timezone) => match unit {
+            TimeUnit::Second => {
+                let value = get_timestamp_second_value(arr, idx);
+                if timezone.is_some() {
+                    let value_tz = value.map(|datetime| datetime.and_utc());
+
+                    encoder.encode_field(&value_tz)?;
+                } else {
+                    encoder.encode_field(&value)?
+                }
+            }
             TimeUnit::Millisecond => {
-                encoder.encode_field(&get_timestamp_millisecond_value(arr, idx))?
+                let value = get_timestamp_millisecond_value(arr, idx);
+                if timezone.is_some() {
+                    let value_tz = value.map(|datetime| datetime.and_utc());
+
+                    encoder.encode_field(&value_tz)?;
+                } else {
+                    encoder.encode_field(&value)?
+                }
             }
             TimeUnit::Microsecond => {
-                encoder.encode_field(&get_timestamp_microsecond_value(arr, idx))?
+                let value = get_timestamp_microsecond_value(arr, idx);
+                if timezone.is_some() {
+                    let value_tz = value.map(|datetime| datetime.and_utc());
+
+                    encoder.encode_field(&value_tz)?;
+                } else {
+                    encoder.encode_field(&value)?
+                }
             }
             TimeUnit::Nanosecond => {
-                encoder.encode_field(&get_timestamp_nanosecond_value(arr, idx))?
-            }
-        },
-        DataType::List(field) => match field.data_type() {
-            DataType::Null => encoder.encode_field(&None::<i8>)?,
-            DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
-            DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
-            DataType::Int16 => encoder.encode_field(&get_i16_list_value(arr, idx))?,
-            DataType::Int32 => encoder.encode_field(&get_i32_list_value(arr, idx))?,
-            DataType::Int64 => encoder.encode_field(&get_i64_list_value(arr, idx))?,
-            DataType::UInt8 => encoder.encode_field(&get_u8_list_value(arr, idx))?,
-            DataType::UInt16 => encoder.encode_field(&get_u16_list_value(arr, idx))?,
-            DataType::UInt32 => encoder.encode_field(&get_u32_list_value(arr, idx))?,
-            DataType::UInt64 => encoder.encode_field(&get_u64_list_value(arr, idx))?,
-            DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
-            DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
-            DataType::Utf8 => encoder.encode_field(&get_utf8_list_value(arr, idx))?,
+                let value = get_timestamp_nanosecond_value(arr, idx);
+                if timezone.is_some() {
+                    let value_tz = value.map(|datetime| datetime.and_utc());
 
-            // TODO: more types
-            list_type => {
-                return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                    "ERROR".to_owned(),
-                    "XX000".to_owned(),
-                    format!(
-                        "Unsupported List Datatype {} and array {:?}",
-                        list_type, &arr
-                    ),
-                ))))
+                    encoder.encode_field(&value_tz)?;
+                } else {
+                    encoder.encode_field(&value)?
+                }
             }
         },
+        DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
+            match field.data_type() {
+                DataType::Null => encoder.encode_field(&None::<i8>)?,
+                DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
+                DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
+                DataType::Int16 => encoder.encode_field(&get_i16_list_value(arr, idx))?,
+                DataType::Int32 => encoder.encode_field(&get_i32_list_value(arr, idx))?,
+                DataType::Int64 => encoder.encode_field(&get_i64_list_value(arr, idx))?,
+                DataType::UInt8 => encoder.encode_field(&get_u8_list_value(arr, idx))?,
+                DataType::UInt16 => encoder.encode_field(&get_u16_list_value(arr, idx))?,
+                DataType::UInt32 => encoder.encode_field(&get_u32_list_value(arr, idx))?,
+                DataType::UInt64 => encoder.encode_field(&get_u64_list_value(arr, idx))?,
+                DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
+                DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
+                DataType::Utf8 => encoder.encode_field(&get_utf8_list_value(arr, idx))?,
+
+                // TODO: more types
+                list_type => {
+                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "XX000".to_owned(),
+                        format!(
+                            "Unsupported List Datatype {} and array {:?}",
+                            list_type, &arr
+                        ),
+                    ))))
+                }
+            }
+        }
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
