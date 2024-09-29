@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Datelike, FixedOffset};
 use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
@@ -496,6 +497,10 @@ where
                 let value = portal.parameter::<bool>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Boolean(value));
             }
+            Type::CHAR => {
+                let value = portal.parameter::<i8>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Int8(value));
+            }
             Type::INT2 => {
                 let value = portal.parameter::<i16>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Int16(value));
@@ -512,6 +517,11 @@ where
                 let value = portal.parameter::<String>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Utf8(value));
             }
+            Type::BYTEA => {
+                let value = portal.parameter::<Vec<u8>>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Binary(value));
+            }
+
             Type::FLOAT4 => {
                 let value = portal.parameter::<f32>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Float32(value));
@@ -527,7 +537,20 @@ where
                     None,
                 ));
             }
-            // TODO: add more types like Timestamp, Datetime, Bytea
+            Type::TIMESTAMPTZ => {
+                let value = portal.parameter::<DateTime<FixedOffset>>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::TimestampMicrosecond(
+                    value.map(|t| t.timestamp_micros()),
+                    value.map(|t| t.offset().to_string().into()),
+                ));
+            }
+            Type::DATE => {
+                let value = portal.parameter::<NaiveDate>(i, &pg_type)?;
+                deserialized_params.push(ScalarValue::Date32(
+                    value.map(|date| date.num_days_from_ce()),
+                ));
+            }
+            // TODO: add more types
             _ => {
                 return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                     "FATAL".to_string(),
