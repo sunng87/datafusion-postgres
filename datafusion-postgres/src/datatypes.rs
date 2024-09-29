@@ -1,6 +1,7 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, FixedOffset};
+use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Utc};
 use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
@@ -13,6 +14,7 @@ use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use timezone::Tz;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
     Ok(match df_type {
@@ -228,45 +230,6 @@ fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Naive
         .value_as_datetime(idx)
 }
 
-fn get_timestamp_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<TimestampSecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_timestamp_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<TimestampMillisecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_timestamp_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<TimestampMicrosecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_timestamp_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<TimestampNanosecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_utf8_list_value(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<String>> {
-    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-    list_arr
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap()
-        .iter()
-        .map(|opt| opt.map(|val| val.to_owned()))
-        .collect()
-}
-
 fn encode_value(
     encoder: &mut DataRowEncoder,
     arr: &Arc<dyn Array>,
@@ -307,46 +270,72 @@ fn encode_value(
         },
         DataType::Timestamp(unit, timezone) => match unit {
             TimeUnit::Second => {
-                let value = get_timestamp_second_value(arr, idx);
-                if timezone.is_some() {
-                    let value_tz = value.map(|datetime| datetime.and_utc());
-
-                    encoder.encode_field(&value_tz)?;
+                let ts_array = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                if let Some(tz) = timezone {
+                    let tz = Tz::from_str(tz.as_ref())
+                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let value = ts_array
+                        .value_as_datetime_with_tz(idx, tz)
+                        .map(|d| d.fixed_offset());
+                    encoder.encode_field(&value)?;
                 } else {
+                    let value = ts_array.value_as_datetime(idx);
                     encoder.encode_field(&value)?
                 }
             }
             TimeUnit::Millisecond => {
-                let value = get_timestamp_millisecond_value(arr, idx);
-                if timezone.is_some() {
-                    let value_tz = value.map(|datetime| datetime.and_utc());
-
-                    encoder.encode_field(&value_tz)?;
+                let ts_array = arr
+                    .as_any()
+                    .downcast_ref::<TimestampMillisecondArray>()
+                    .unwrap();
+                if let Some(tz) = timezone {
+                    let tz = Tz::from_str(tz.as_ref())
+                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let value = ts_array
+                        .value_as_datetime_with_tz(idx, tz)
+                        .map(|d| d.fixed_offset());
+                    encoder.encode_field(&value)?;
                 } else {
+                    let value = ts_array.value_as_datetime(idx);
                     encoder.encode_field(&value)?
                 }
             }
             TimeUnit::Microsecond => {
-                let value = get_timestamp_microsecond_value(arr, idx);
-                if timezone.is_some() {
-                    let value_tz = value.map(|datetime| datetime.and_utc());
-
-                    encoder.encode_field(&value_tz)?;
+                let ts_array = arr
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap();
+                if let Some(tz) = timezone {
+                    let tz = Tz::from_str(tz.as_ref())
+                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let value = ts_array
+                        .value_as_datetime_with_tz(idx, tz)
+                        .map(|d| d.fixed_offset());
+                    encoder.encode_field(&value)?;
                 } else {
+                    let value = ts_array.value_as_datetime(idx);
                     encoder.encode_field(&value)?
                 }
             }
             TimeUnit::Nanosecond => {
-                let value = get_timestamp_nanosecond_value(arr, idx);
-                if timezone.is_some() {
-                    let value_tz = value.map(|datetime| datetime.and_utc());
-
-                    encoder.encode_field(&value_tz)?;
+                let ts_array = arr
+                    .as_any()
+                    .downcast_ref::<TimestampNanosecondArray>()
+                    .unwrap();
+                if let Some(tz) = timezone {
+                    let tz = Tz::from_str(tz.as_ref())
+                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let value = ts_array
+                        .value_as_datetime_with_tz(idx, tz)
+                        .map(|d| d.fixed_offset());
+                    encoder.encode_field(&value)?;
                 } else {
+                    let value = ts_array.value_as_datetime(idx);
                     encoder.encode_field(&value)?
                 }
             }
         },
+
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
             match field.data_type() {
                 DataType::Null => encoder.encode_field(&None::<i8>)?,
@@ -361,7 +350,241 @@ fn encode_value(
                 DataType::UInt64 => encoder.encode_field(&get_u64_list_value(arr, idx))?,
                 DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
                 DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
-                DataType::Utf8 => encoder.encode_field(&get_utf8_list_value(arr, idx))?,
+                DataType::Utf8 => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .iter()
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
+                DataType::Binary => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<BinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
+                DataType::LargeBinary => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<LargeBinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
+
+                DataType::Date32 => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<Date32Array>()
+                        .unwrap()
+                        .iter()
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
+                DataType::Date64 => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<Date64Array>()
+                        .unwrap()
+                        .iter()
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
+                DataType::Time32(unit) => match unit {
+                    TimeUnit::Second => {
+                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let value: Vec<_> = list_arr
+                            .as_any()
+                            .downcast_ref::<Time32SecondArray>()
+                            .unwrap()
+                            .iter()
+                            .collect();
+                        encoder.encode_field(&value)?
+                    }
+                    TimeUnit::Millisecond => {
+                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let value: Vec<_> = list_arr
+                            .as_any()
+                            .downcast_ref::<Time32MillisecondArray>()
+                            .unwrap()
+                            .iter()
+                            .collect();
+                        encoder.encode_field(&value)?
+                    }
+                    _ => {}
+                },
+                DataType::Time64(unit) => match unit {
+                    TimeUnit::Microsecond => {
+                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let value: Vec<_> = list_arr
+                            .as_any()
+                            .downcast_ref::<Time64MicrosecondArray>()
+                            .unwrap()
+                            .iter()
+                            .collect();
+                        encoder.encode_field(&value)?
+                    }
+                    TimeUnit::Nanosecond => {
+                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let value: Vec<_> = list_arr
+                            .as_any()
+                            .downcast_ref::<Time64NanosecondArray>()
+                            .unwrap()
+                            .iter()
+                            .collect();
+                        encoder.encode_field(&value)?
+                    }
+                    _ => {}
+                },
+                DataType::Timestamp(unit, timezone) => match unit {
+                    TimeUnit::Second => {
+                        let list_array =
+                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let array_iter = list_array
+                            .as_any()
+                            .downcast_ref::<TimestampSecondArray>()
+                            .unwrap()
+                            .iter();
+
+                        if let Some(tz) = timezone {
+                            let tz = Tz::from_str(tz.as_ref())
+                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp(i, 0).map(|dt| {
+                                            Utc.from_utc_datetime(&dt.naive_utc())
+                                                .with_timezone(&tz)
+                                                .fixed_offset()
+                                        })
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?;
+                        } else {
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp(i, 0).map(|dt| dt.naive_utc())
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?
+                        }
+                    }
+                    TimeUnit::Millisecond => {
+                        let list_array =
+                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let array_iter = list_array
+                            .as_any()
+                            .downcast_ref::<TimestampMillisecondArray>()
+                            .unwrap()
+                            .iter();
+
+                        if let Some(tz) = timezone {
+                            let tz = Tz::from_str(tz.as_ref())
+                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp_millis(i).map(|dt| {
+                                            Utc.from_utc_datetime(&dt.naive_utc())
+                                                .with_timezone(&tz)
+                                                .fixed_offset()
+                                        })
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?;
+                        } else {
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp_millis(i).map(|dt| dt.naive_utc())
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?
+                        }
+                    }
+                    TimeUnit::Microsecond => {
+                        let list_array =
+                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let array_iter = list_array
+                            .as_any()
+                            .downcast_ref::<TimestampMicrosecondArray>()
+                            .unwrap()
+                            .iter();
+
+                        if let Some(tz) = timezone {
+                            let tz = Tz::from_str(tz.as_ref())
+                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp_micros(i).map(|dt| {
+                                            Utc.from_utc_datetime(&dt.naive_utc())
+                                                .with_timezone(&tz)
+                                                .fixed_offset()
+                                        })
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?;
+                        } else {
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.and_then(|i| {
+                                        DateTime::from_timestamp_micros(i).map(|dt| dt.naive_utc())
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?
+                        }
+                    }
+                    TimeUnit::Nanosecond => {
+                        let list_array =
+                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                        let array_iter = list_array
+                            .as_any()
+                            .downcast_ref::<TimestampNanosecondArray>()
+                            .unwrap()
+                            .iter();
+
+                        if let Some(tz) = timezone {
+                            let tz = Tz::from_str(tz.as_ref())
+                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                            let value: Vec<_> = array_iter
+                                .map(|i| {
+                                    i.map(|i| {
+                                        Utc.from_utc_datetime(
+                                            &DateTime::from_timestamp_nanos(i).naive_utc(),
+                                        )
+                                        .with_timezone(&tz)
+                                        .fixed_offset()
+                                    })
+                                })
+                                .collect();
+                            encoder.encode_field(&value)?;
+                        } else {
+                            let value: Vec<_> = array_iter
+                                .map(|i| i.map(|i| DateTime::from_timestamp_nanos(i).naive_utc()))
+                                .collect();
+                            encoder.encode_field(&value)?
+                        }
+                    }
+                },
 
                 // TODO: more types
                 list_type => {
