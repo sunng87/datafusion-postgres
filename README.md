@@ -1,7 +1,9 @@
 # datafusion-postgres
 
-Serving any CSV/JSON/Parquet/Arrow/Avro data files as Postgres tables, with
-Datafusion.
+![Crates.io Version](https://img.shields.io/crates/v/datafusion-postgres?label=datafusion-postgres)
+
+Serving any [datafusion](https://datafusion.apache.org) `SessionContext` in
+Postgres protocol. Available as a library and a cli tool.
 
 This project is to add a [postgresql compatible access
 layer](https://github.com/sunng87/pgwire) to the [Apache
