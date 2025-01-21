@@ -3,7 +3,7 @@ resolver = "2"
 members = ["datafusion-postgres", "datafusion-postgres-cli"]
 
 [workspace.dependencies]
-pgwire = "0.25"
+pgwire = "0.28"
 datafusion = { version = "43", default-features = false }
 tokio = { version = "1", default-features = false }
 
