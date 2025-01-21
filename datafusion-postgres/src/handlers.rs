@@ -11,18 +11,21 @@ use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{DescribePortalResponse, DescribeStatementResponse, Response};
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
-use pgwire::api::{ClientInfo, PgWireHandlerFactory, Type};
+use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 
 use crate::datatypes::{self, into_pg_type};
 
 pub struct HandlerFactory(pub Arc<DfSessionService>);
 
-impl PgWireHandlerFactory for HandlerFactory {
-    type StartupHandler = NoopStartupHandler;
+impl NoopStartupHandler for DfSessionService {}
+
+impl PgWireServerHandlers for HandlerFactory {
+    type StartupHandler = DfSessionService;
     type SimpleQueryHandler = DfSessionService;
     type ExtendedQueryHandler = DfSessionService;
     type CopyHandler = NoopCopyHandler;
+    type ErrorHandler = NoopErrorHandler;
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
         self.0.clone()
@@ -33,11 +36,15 @@ impl PgWireHandlerFactory for HandlerFactory {
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        Arc::new(NoopStartupHandler)
+        self.0.clone()
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {
         Arc::new(NoopCopyHandler)
+    }
+
+    fn error_handler(&self) -> Arc<Self::ErrorHandler> {
+        Arc::new(NoopErrorHandler)
     }
 }
 
