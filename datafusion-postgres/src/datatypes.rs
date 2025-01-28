@@ -162,7 +162,6 @@ get_primitive_list_value!(get_u64_list_value, UInt64Type, i64, |val: u64| {
 get_primitive_list_value!(get_f32_list_value, Float32Type, f32);
 get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
 
-
 fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
     arr.as_any()
         .downcast_ref::<StringViewArray>()
