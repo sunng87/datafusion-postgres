@@ -71,6 +71,7 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
                 }
             }
         }
+        DataType::Utf8View => Type::TEXT,
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -162,6 +163,14 @@ get_primitive_list_value!(get_u64_list_value, UInt64Type, i64, |val: u64| {
 get_primitive_list_value!(get_f32_list_value, Float32Type, f32);
 get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
 
+
+fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
+    arr.as_any()
+        .downcast_ref::<StringViewArray>()
+        .unwrap()
+        .value(idx)
+}
+
 fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
     arr.as_any()
         .downcast_ref::<StringArray>()
@@ -250,6 +259,7 @@ fn encode_value(
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
+        DataType::Utf8View => encoder.encode_field(&get_utf8_view_value(arr, idx))?,
         DataType::LargeUtf8 => encoder.encode_field(&get_large_utf8_value(arr, idx))?,
         DataType::Binary => encoder.encode_field(&get_binary_value(arr, idx))?,
         DataType::LargeBinary => encoder.encode_field(&get_large_binary_value(arr, idx))?,
