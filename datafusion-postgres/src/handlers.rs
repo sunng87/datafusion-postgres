@@ -201,13 +201,11 @@ impl ExtendedQueryHandler for DfSessionService {
     }
 }
 
-fn ordered_param_types<'a>(
-    types: &'a HashMap<String, Option<DataType>>,
-) -> Vec<Option<&'a DataType>> {
+fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
     // Datafusion stores the parameters as a map.  In our case, the keys will be
     // `$1`, `$2` etc.  The values will be the parameter types.
 
     let mut types = types.iter().collect::<Vec<_>>();
-    types.sort_by(|a, b| a.0.cmp(&b.0));
+    types.sort_by(|a, b| a.0.cmp(b.0));
     types.into_iter().map(|pt| pt.1.as_ref()).collect()
 }
