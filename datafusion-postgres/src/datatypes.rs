@@ -2,7 +2,7 @@ use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use chrono::{NaiveDate, NaiveDateTime};
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
@@ -784,9 +784,8 @@ where
             }
             Type::DATE => {
                 let value = portal.parameter::<NaiveDate>(i, &pg_type)?;
-                deserialized_params.push(ScalarValue::Date32(
-                    value.map(|date| date.num_days_from_ce()),
-                ));
+                deserialized_params
+                    .push(ScalarValue::Date32(value.map(Date32Type::from_naive_date)));
             }
             // TODO: add more types
             _ => {
