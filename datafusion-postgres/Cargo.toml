@@ -2,7 +2,7 @@
 name = "datafusion-postgres"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.80.1"
+rust-version = "1.82.0"
 description = "Exporting datafusion query engine with postgres wire protocol"
 authors = ["Ning Sun <sunng@pm.me>"]
 license = "Apache-2.0"
