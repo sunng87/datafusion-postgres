@@ -1,3 +1,4 @@
+// src/handlers.rs
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,8 +16,14 @@ use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 
+// --- ADD THESE IMPORTS FOR MULTI-STATEMENT PARSING ---
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser as SqlParser;
+// ------------------------------------------------------
+
 use crate::datatypes::{self, into_pg_type};
 
+/// A factory that creates our handlers for the PGWire server.
 pub struct HandlerFactory(pub Arc<DfSessionService>);
 
 impl NoopStartupHandler for DfSessionService {}
@@ -49,9 +56,10 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 }
 
+/// Our primary session service, storing a DataFusion `SessionContext`.
 pub struct DfSessionService {
-    session_context: Arc<SessionContext>,
-    parser: Arc<Parser>,
+    pub session_context: Arc<SessionContext>,
+    pub parser: Arc<Parser>,
 }
 
 impl DfSessionService {
@@ -67,27 +75,7 @@ impl DfSessionService {
     }
 }
 
-#[async_trait]
-impl SimpleQueryHandler for DfSessionService {
-    async fn do_query<'a, C>(
-        &self,
-        _client: &mut C,
-        query: &'a str,
-    ) -> PgWireResult<Vec<Response<'a>>>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        let ctx = &self.session_context;
-        let df = ctx
-            .sql(query)
-            .await
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-
-        let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-        Ok(vec![Response::Query(resp)])
-    }
-}
-
+/// A simple parser that builds a logical plan from SQL text, using DataFusion.
 pub struct Parser {
     session_context: Arc<SessionContext>,
 }
@@ -104,18 +92,68 @@ impl QueryParser for Parser {
             .create_logical_plan(sql)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let optimised = state
+        let optimized = state
             .optimize(&logical_plan)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        Ok(optimised)
+        Ok(optimized)
     }
 }
 
+// ----------------------------------------------------------------
+//   SimpleQueryHandler Implementation (multi-statement support)
+// ----------------------------------------------------------------
+#[async_trait]
+impl SimpleQueryHandler for DfSessionService {
+    async fn do_query<'a, C>(
+        &self,
+        _client: &mut C,
+        query: &'a str,
+    ) -> PgWireResult<Vec<Response<'a>>>
+    where
+        C: ClientInfo + Unpin + Send + Sync,
+    {
+        // 1) Parse the incoming query string into multiple statements using sqlparser.
+        let dialect = GenericDialect {};
+        let stmts = match SqlParser::parse_sql(&dialect, query) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(PgWireError::ApiError(Box::new(e)));
+            }
+        };
+
+        // 2) For each parsed statement, execute with DataFusion and collect results.
+        let mut responses = Vec::with_capacity(stmts.len());
+        for statement in stmts {
+            // Convert the AST statement back to SQL text
+            // (some statements might be empty if there's a trailing semicolon)
+            let stmt_string = statement.to_string().trim().to_owned();
+            if stmt_string.is_empty() {
+                continue;
+            }
+
+            // Execute the statement in DataFusion
+            let df = self
+                .session_context
+                .sql(&stmt_string)
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+            // 3) Encode the DataFrame into a QueryResponse for the client
+            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            responses.push(Response::Query(resp));
+        }
+
+        Ok(responses)
+    }
+}
+
+// ----------------------------------------------------------------
+//   ExtendedQueryHandler Implementation (same as original)
+// ----------------------------------------------------------------
 #[async_trait]
 impl ExtendedQueryHandler for DfSessionService {
     type Statement = LogicalPlan;
-
     type QueryParser = Parser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -201,11 +239,11 @@ impl ExtendedQueryHandler for DfSessionService {
     }
 }
 
+/// Helper to convert DataFusion’s parameter map into an ordered list.
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
-    // Datafusion stores the parameters as a map.  In our case, the keys will be
-    // `$1`, `$2` etc.  The values will be the parameter types.
-
-    let mut types = types.iter().collect::<Vec<_>>();
-    types.sort_by(|a, b| a.0.cmp(b.0));
-    types.into_iter().map(|pt| pt.1.as_ref()).collect()
+    // DataFusion stores parameters as a map keyed by "$1", "$2", etc.
+    // We sort them in ascending order by key to match the expected param order.
+    let mut types_vec = types.iter().collect::<Vec<_>>();
+    types_vec.sort_by(|a, b| a.0.cmp(b.0));
+    types_vec.into_iter().map(|pt| pt.1.as_ref()).collect()
 }
