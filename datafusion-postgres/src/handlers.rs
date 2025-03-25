@@ -16,7 +16,7 @@ use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
 
-// --- ADD THESE IMPORTS FOR MULTI-STATEMENT PARSING ---
+// --- Imports for multi-statement parsing ---
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser as SqlParser;
 // ------------------------------------------------------
@@ -115,31 +115,34 @@ impl SimpleQueryHandler for DfSessionService {
     {
         // 1) Parse the incoming query string into multiple statements using sqlparser.
         let dialect = GenericDialect {};
-        let stmts = match SqlParser::parse_sql(&dialect, query) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(PgWireError::ApiError(Box::new(e)));
-            }
-        };
+        let stmts = SqlParser::parse_sql(&dialect, query)
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
         // 2) For each parsed statement, execute with DataFusion and collect results.
         let mut responses = Vec::with_capacity(stmts.len());
         for statement in stmts {
-            // Convert the AST statement back to SQL text
-            // (some statements might be empty if there's a trailing semicolon)
+            // Convert the AST statement back to SQL text.
             let stmt_string = statement.to_string().trim().to_owned();
             if stmt_string.is_empty() {
                 continue;
             }
 
-            // Execute the statement in DataFusion
+            // Intercept configuration commands (e.g. SET, SHOW) that are unsupported.
+            let stmt_upper = stmt_string.to_uppercase();
+            if stmt_upper.starts_with("SET ") || stmt_upper.starts_with("SHOW ") {
+                // Return an empty query response for these commands.
+                responses.push(Response::EmptyQuery);
+                continue;
+            }
+
+            // Execute the statement in DataFusion.
             let df = self
                 .session_context
                 .sql(&stmt_string)
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            // 3) Encode the DataFrame into a QueryResponse for the client
+            // 3) Encode the DataFrame into a QueryResponse for the client.
             let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
             responses.push(Response::Query(resp));
         }
@@ -242,7 +245,7 @@ impl ExtendedQueryHandler for DfSessionService {
 /// Helper to convert DataFusion’s parameter map into an ordered list.
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
     // DataFusion stores parameters as a map keyed by "$1", "$2", etc.
-    // We sort them in ascending order by key to match the expected param order.
+    // We sort them in ascending order by key to match the expected parameter order.
     let mut types_vec = types.iter().collect::<Vec<_>>();
     types_vec.sort_by(|a, b| a.0.cmp(b.0));
     types_vec.into_iter().map(|pt| pt.1.as_ref()).collect()
