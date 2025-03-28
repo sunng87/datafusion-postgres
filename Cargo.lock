@@ -1359,6 +1359,7 @@ dependencies = [
  "futures",
  "pgwire",
  "sqlparser 0.55.0",
+ "tokio",
 ]
 
 [[package]]
