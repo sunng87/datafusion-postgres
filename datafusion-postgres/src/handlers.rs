@@ -124,7 +124,7 @@ impl DfSessionService {
                 *sc_guard = new_context;
                 Ok(())
             }
-            "client_encoding"
+            | "client_encoding"
             | "search_path"
             | "application_name"
             | "datestyle"
@@ -154,7 +154,6 @@ impl DfSessionService {
 
         let sc_guard = self.session_context.read().await;
         let config = sc_guard.state().config().options().clone();
-        drop(sc_guard);
 
         let value = match var_name.as_str() {
             "timezone" => config
@@ -232,6 +231,17 @@ impl DfSessionService {
                 .get(&var_name)
                 .cloned()
                 .unwrap_or_else(|| "read committed".to_string()),
+
+            // *** New variables to keep psql happy ***
+            "server_version" => "14.0".to_string(),
+            "server_version_num" => "140000".to_string(),
+            "server_encoding" => "UTF8".to_string(),
+            "is_superuser" => "off".to_string(),
+            "lc_messages" => "en_US.UTF-8".to_string(),
+            "lc_monetary" => "en_US.UTF-8".to_string(),
+            "lc_numeric" => "en_US.UTF-8".to_string(),
+            "lc_time" => "en_US.UTF-8".to_string(),
+
             "all" => {
                 let mut names = Vec::new();
                 let mut values = Vec::new();
@@ -240,50 +250,39 @@ impl DfSessionService {
                     names.push("timezone".to_string());
                     values.push(tz.clone());
                 }
+
                 let custom_vars = self.custom_session_vars.read().await;
                 for (name, value) in custom_vars.iter() {
                     names.push(name.clone());
                     values.push(value.clone());
                 }
-                if !custom_vars.contains_key("client_encoding") {
-                    names.push("client_encoding".to_string());
-                    values.push("UTF8".to_string());
-                }
-                if !custom_vars.contains_key("search_path") {
-                    names.push("search_path".to_string());
-                    values.push("public".to_string());
-                }
-                if !custom_vars.contains_key("application_name") {
-                    names.push("application_name".to_string());
-                    values.push("".to_string());
-                }
-                if !custom_vars.contains_key("datestyle") {
-                    names.push("datestyle".to_string());
-                    values.push("ISO, MDY".to_string());
-                }
-                if !custom_vars.contains_key("client_min_messages") {
-                    names.push("client_min_messages".to_string());
-                    values.push("notice".to_string());
-                }
-                if !custom_vars.contains_key("extra_float_digits") {
-                    names.push("extra_float_digits".to_string());
-                    values.push("3".to_string());
-                }
-                if !custom_vars.contains_key("standard_conforming_strings") {
-                    names.push("standard_conforming_strings".to_string());
-                    values.push("on".to_string());
-                }
-                if !custom_vars.contains_key("check_function_bodies") {
-                    names.push("check_function_bodies".to_string());
-                    values.push("off".to_string());
-                }
-                if !custom_vars.contains_key("transaction_read_only") {
-                    names.push("transaction_read_only".to_string());
-                    values.push("off".to_string());
-                }
-                if !custom_vars.contains_key("transaction_isolation") {
-                    names.push("transaction_isolation".to_string());
-                    values.push("read committed".to_string());
+
+                let defaults = vec![
+                    ("client_encoding", "UTF8"),
+                    ("search_path", "public"),
+                    ("application_name", ""),
+                    ("datestyle", "ISO, MDY"),
+                    ("client_min_messages", "notice"),
+                    ("extra_float_digits", "3"),
+                    ("standard_conforming_strings", "on"),
+                    ("check_function_bodies", "off"),
+                    ("transaction_read_only", "off"),
+                    ("transaction_isolation", "read committed"),
+                    ("server_version", "14.0"),
+                    ("server_version_num", "140000"),
+                    ("server_encoding", "UTF8"),
+                    ("is_superuser", "off"),
+                    ("lc_messages", "en_US.UTF-8"),
+                    ("lc_monetary", "en_US.UTF-8"),
+                    ("lc_numeric", "en_US.UTF-8"),
+                    ("lc_time", "en_US.UTF-8"),
+                ];
+
+                for (k, v) in defaults {
+                    if !names.contains(&k.to_string()) {
+                        names.push(k.to_string());
+                        values.push(v.to_string());
+                    }
                 }
 
                 let schema = Arc::new(Schema::new(vec![
@@ -298,13 +297,13 @@ impl DfSessionService {
                     ],
                 )
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                let sc_guard = self.session_context.read().await;
+
                 let df = sc_guard
                     .read_batch(batch)
                     .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                drop(sc_guard);
                 return datatypes::encode_dataframe(df, &Format::UnifiedText).await;
             }
+
             _ => {
                 return Err(PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
                     "ERROR".to_string(),
@@ -315,13 +314,12 @@ impl DfSessionService {
         };
 
         let schema = Arc::new(Schema::new(vec![Field::new(&var_name, DataType::Utf8, false)]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(StringArray::from(vec![value]))])
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![value]))])
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        let sc_guard = self.session_context.read().await;
         let df = sc_guard
             .read_batch(batch)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        drop(sc_guard);
+
         datatypes::encode_dataframe(df, &Format::UnifiedText).await
     }
 }
@@ -333,6 +331,7 @@ pub struct Parser {
 #[async_trait]
 impl QueryParser for Parser {
     type Statement = LogicalPlan;
+
     async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
         let sc_guard = self.session_context.read().await;
         let state = sc_guard.state();
@@ -361,6 +360,7 @@ impl SimpleQueryHandler for DfSessionService {
         let stmts = SqlParser::parse_sql(&dialect, query)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         let mut responses = Vec::with_capacity(stmts.len());
+
         for statement in stmts {
             let stmt_string = statement.to_string().trim().to_owned();
             if stmt_string.is_empty() {
@@ -387,7 +387,6 @@ impl SimpleQueryHandler for DfSessionService {
                         .sql(&stmt_string)
                         .await
                         .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                    drop(sc_guard);
                     let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
                     responses.push(Response::Query(resp));
                 }
@@ -401,9 +400,11 @@ impl SimpleQueryHandler for DfSessionService {
 impl ExtendedQueryHandler for DfSessionService {
     type Statement = LogicalPlan;
     type QueryParser = Parser;
+
     fn query_parser(&self) -> Arc<Self::QueryParser> {
         self.parser.clone()
     }
+
     async fn do_describe_statement<C>(
         &self,
         _client: &mut C,
@@ -420,6 +421,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         let mut param_types = Vec::with_capacity(params.len());
+
         for param_type in ordered_param_types(&params).iter() {
             if let Some(datatype) = param_type {
                 let pgtype = into_pg_type(datatype)?;
@@ -430,6 +432,7 @@ impl ExtendedQueryHandler for DfSessionService {
         }
         Ok(DescribeStatementResponse::new(param_types, fields))
     }
+
     async fn do_describe_portal<C>(
         &self,
         _client: &mut C,
@@ -444,6 +447,7 @@ impl ExtendedQueryHandler for DfSessionService {
         let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), format)?;
         Ok(DescribePortalResponse::new(fields))
     }
+
     async fn do_query<'a, C>(
         &self,
         _client: &mut C,
@@ -455,6 +459,8 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let stmt_string = portal.statement.id.clone();
         let stmt_upper = stmt_string.to_uppercase();
+
+        // If the statement is a SET or SHOW, handle it here
         if stmt_upper.starts_with("SET ") {
             let dialect = GenericDialect {};
             let stmts = SqlParser::parse_sql(&dialect, &stmt_string)
@@ -476,6 +482,8 @@ impl ExtendedQueryHandler for DfSessionService {
                 return Ok(Response::Query(resp));
             }
         }
+
+        // Otherwise, treat it as a normal prepared statement
         let plan = &portal.statement.statement;
         let param_types = plan
             .get_parameter_types()
@@ -486,12 +494,13 @@ impl ExtendedQueryHandler for DfSessionService {
             .clone()
             .replace_params_with_values(&param_values)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
         let sc_guard = self.session_context.read().await;
         let dataframe = sc_guard
             .execute_logical_plan(plan)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        drop(sc_guard);
+
         let resp = datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
@@ -500,6 +509,8 @@ impl ExtendedQueryHandler for DfSessionService {
 fn ordered_param_types(
     types: &HashMap<String, Option<DataType>>,
 ) -> Vec<Option<&DataType>> {
+    // Datafusion stores the parameters as a map.  In our case, the keys will be
+    // `$1`, `$2` etc.  The values will be the parameter types.
     let mut types_vec = types.iter().collect::<Vec<_>>();
     types_vec.sort_by(|a, b| a.0.cmp(b.0));
     types_vec.into_iter().map(|pt| pt.1.as_ref()).collect()
