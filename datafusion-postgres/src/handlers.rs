@@ -78,11 +78,11 @@ impl DfSessionService {
     async fn handle_set(&self, variable: &ObjectName, value: &[Expr]) -> PgWireResult<()> {
         let var_name = variable
             .0
-            .get(0)
+            .first()
             .map(|ident| ident.to_string().to_lowercase())
             .unwrap_or_default();
 
-        let value_str = match value.get(0) {
+        let value_str = match value.first() {
             Some(Expr::Value(v)) => match &v.value {
                 sqlparser::ast::Value::SingleQuotedString(s)
                 | sqlparser::ast::Value::DoubleQuotedString(s) => s.clone(),
@@ -91,11 +91,13 @@ impl DfSessionService {
             },
             Some(expr) => expr.to_string(),
             None => {
-                return Err(PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "22023".to_string(),
-                    "SET requires a value".to_string(),
-                ))));
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "22023".to_string(),
+                        "SET requires a value".to_string(),
+                    ),
+                )));
             }
         };
 
@@ -124,7 +126,7 @@ impl DfSessionService {
                 *sc_guard = new_context;
                 Ok(())
             }
-            | "client_encoding"
+            "client_encoding"
             | "search_path"
             | "application_name"
             | "datestyle"
@@ -138,17 +140,19 @@ impl DfSessionService {
                 vars.insert(var_name, value_str);
                 Ok(())
             }
-            _ => Err(PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                "ERROR".to_string(),
-                "42704".to_string(),
-                format!("Unrecognized configuration parameter '{}'", var_name),
-            )))),
+            _ => Err(PgWireError::UserError(Box::new(
+                pgwire::error::ErrorInfo::new(
+                    "ERROR".to_string(),
+                    "42704".to_string(),
+                    format!("Unrecognized configuration parameter '{}'", var_name),
+                ),
+            ))),
         }
     }
 
     async fn handle_show<'a>(&self, variable: &[Ident]) -> PgWireResult<QueryResponse<'a>> {
         let var_name = variable
-            .get(0)
+            .first()
             .map(|ident| ident.to_string().to_lowercase())
             .unwrap_or_default();
 
@@ -305,15 +309,21 @@ impl DfSessionService {
             }
 
             _ => {
-                return Err(PgWireError::UserError(Box::new(pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "42704".to_string(),
-                    format!("Unrecognized configuration parameter '{}'", var_name),
-                ))));
+                return Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "42704".to_string(),
+                        format!("Unrecognized configuration parameter '{}'", var_name),
+                    ),
+                )));
             }
         };
 
-        let schema = Arc::new(Schema::new(vec![Field::new(&var_name, DataType::Utf8, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            &var_name,
+            DataType::Utf8,
+            false,
+        )]));
         let batch = RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(vec![value]))])
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
         let df = sc_guard
@@ -367,15 +377,17 @@ impl SimpleQueryHandler for DfSessionService {
                 continue;
             }
             match statement {
-                Statement::SetVariable { variables, value, .. } => {
+                Statement::SetVariable {
+                    variables, value, ..
+                } => {
                     let var = match variables {
                         sqlparser::ast::OneOrManyWithParens::One(ref name) => name,
-                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
+                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => {
+                            names.first().unwrap()
+                        }
                     };
                     self.handle_set(var, &value).await?;
-                    responses.push(Response::Execution(
-                        pgwire::api::results::Tag::new("SET").into(),
-                    ));
+                    responses.push(Response::Execution(pgwire::api::results::Tag::new("SET")));
                 }
                 Statement::ShowVariable { variable } => {
                     let resp = self.handle_show(&variable).await?;
@@ -415,8 +427,7 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let plan = &target.statement;
         let schema = plan.schema();
-        let fields =
-            datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
         let params = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -465,13 +476,16 @@ impl ExtendedQueryHandler for DfSessionService {
             let dialect = GenericDialect {};
             let stmts = SqlParser::parse_sql(&dialect, &stmt_string)
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            if let Statement::SetVariable { variables, value, .. } = &stmts[0] {
+            if let Statement::SetVariable {
+                variables, value, ..
+            } = &stmts[0]
+            {
                 let var = match variables {
                     sqlparser::ast::OneOrManyWithParens::One(ref name) => name,
                     sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
                 };
-                self.handle_set(var, &value).await?;
-                return Ok(Response::Execution(pgwire::api::results::Tag::new("SET").into()));
+                self.handle_set(var, value).await?;
+                return Ok(Response::Execution(pgwire::api::results::Tag::new("SET")));
             }
         } else if stmt_upper.starts_with("SHOW ") {
             let dialect = GenericDialect {};
@@ -506,9 +520,7 @@ impl ExtendedQueryHandler for DfSessionService {
     }
 }
 
-fn ordered_param_types(
-    types: &HashMap<String, Option<DataType>>,
-) -> Vec<Option<&DataType>> {
+fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
     // Datafusion stores the parameters as a map.  In our case, the keys will be
     // `$1`, `$2` etc.  The values will be the parameter types.
     let mut types_vec = types.iter().collect::<Vec<_>>();
