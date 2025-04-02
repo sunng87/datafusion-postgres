@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::StringArray;
+use datafusion::arrow::array::{ListBuilder, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{create_udf, ColumnarValue, LogicalPlan, Volatility};
 use datafusion::prelude::*;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::copy::NoopCopyHandler;
@@ -17,7 +17,7 @@ use pgwire::api::results::{
 use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
-use sqlparser::ast::{Expr, Ident, ObjectName, Statement};
+use sqlparser::ast::{Expr, Ident, ObjectName, Statement, ObjectNamePart};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser as SqlParser;
 use tokio::sync::RwLock;
@@ -75,12 +75,31 @@ impl DfSessionService {
         }
     }
 
+    /// Call this method to register additional UDFs (such as current_schemas)
+    pub async fn register_udfs(&self) -> datafusion::error::Result<()> {
+        let mut ctx = self.session_context.write().await;
+        register_current_schemas_udf(&mut ctx)?;
+        Ok(())
+    }
+
+    /// Helper function to read a custom session variable, returning the default if not set.
+    async fn session_var(&self, key: &str, default: &str) -> String {
+        self.custom_session_vars
+            .read()
+            .await
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| default.to_string())
+    }
+
     async fn handle_set(&self, variable: &ObjectName, value: &[Expr]) -> PgWireResult<()> {
+        // Join all parts of the ObjectName so that "TIME ZONE" becomes "timezone"
         let var_name = variable
             .0
-            .first()
-            .map(|ident| ident.to_string().to_lowercase())
-            .unwrap_or_default();
+            .iter()
+            .map(|ident| ident.to_string())
+            .collect::<String>()
+            .to_lowercase();
 
         let value_str = match value.first() {
             Some(Expr::Value(v)) => match &v.value {
@@ -151,90 +170,33 @@ impl DfSessionService {
     }
 
     async fn handle_show<'a>(&self, variable: &[Ident]) -> PgWireResult<QueryResponse<'a>> {
+        // Join all identifiers so that "TIME ZONE" becomes "timezone"
         let var_name = variable
-            .first()
-            .map(|ident| ident.to_string().to_lowercase())
-            .unwrap_or_default();
+            .iter()
+            .map(|ident| ident.to_string())
+            .collect::<String>()
+            .to_lowercase();
 
         let sc_guard = self.session_context.read().await;
         let config = sc_guard.state().config().options().clone();
 
         let value = match var_name.as_str() {
-            "timezone" => config
+            // Support both "timezone" and "time" so that pgcli/psql are happy.
+            "timezone" | "time" => config
                 .execution
                 .time_zone
                 .clone()
                 .unwrap_or_else(|| "UTC".to_string()),
-            "client_encoding" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "UTF8".to_string()),
-            "search_path" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "public".to_string()),
-            "application_name" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "".to_string()),
-            "datestyle" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "ISO, MDY".to_string()),
-            "client_min_messages" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "notice".to_string()),
-            "extra_float_digits" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "3".to_string()),
-            "standard_conforming_strings" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "on".to_string()),
-            "check_function_bodies" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "off".to_string()),
-            "transaction_read_only" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "off".to_string()),
-            "transaction_isolation" => self
-                .custom_session_vars
-                .read()
-                .await
-                .get(&var_name)
-                .cloned()
-                .unwrap_or_else(|| "read committed".to_string()),
+            "client_encoding" => self.session_var("client_encoding", "UTF8").await,
+            "search_path" => self.session_var("search_path", "public").await,
+            "application_name" => self.session_var("application_name", "").await,
+            "datestyle" => self.session_var("datestyle", "ISO, MDY").await,
+            "client_min_messages" => self.session_var("client_min_messages", "notice").await,
+            "extra_float_digits" => self.session_var("extra_float_digits", "3").await,
+            "standard_conforming_strings" => self.session_var("standard_conforming_strings", "on").await,
+            "check_function_bodies" => self.session_var("check_function_bodies", "off").await,
+            "transaction_read_only" => self.session_var("transaction_read_only", "off").await,
+            "transaction_isolation" => self.session_var("transaction_isolation", "read committed").await,
 
             // *** New variables to keep psql happy ***
             "server_version" => "14.0".to_string(),
@@ -280,6 +242,7 @@ impl DfSessionService {
                     ("lc_monetary", "en_US.UTF-8"),
                     ("lc_numeric", "en_US.UTF-8"),
                     ("lc_time", "en_US.UTF-8"),
+                    ("time", "UTC"),
                 ];
 
                 for (k, v) in defaults {
@@ -291,7 +254,11 @@ impl DfSessionService {
 
                 let schema = Arc::new(Schema::new(vec![
                     Field::new("name", DataType::Utf8, false),
-                    Field::new("setting", DataType::Utf8, false),
+                    Field::new(
+                        "setting",
+                        DataType::List(Box::new(Field::new("item", DataType::Utf8, true)).into()),
+                        false,
+                    ),
                 ]));
                 let batch = RecordBatch::try_new(
                     schema.clone(),
@@ -366,6 +333,55 @@ impl SimpleQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
+        let query_trimmed = query.trim();
+        let query_lower = query_trimmed.to_lowercase();
+
+        // Intercept SELECT current_schemas(...) queries.
+        if query_lower.starts_with("select current_schemas(") {
+            // Build a StringArray with "public"
+            let mut string_builder = StringBuilder::new();
+            string_builder.append_value("public");
+            // Build a ListArray containing "public"
+            let mut list_builder = ListBuilder::new(StringBuilder::new());
+            list_builder.values().append_value("public");
+            list_builder.append(true);
+            let list_array = list_builder.finish();
+
+            // Define schema for a single column "current_schemas" of type List(Utf8)
+            let field = Field::new(
+                "current_schemas",
+                DataType::List(Box::new(Field::new("item", DataType::Utf8, true)).into()),
+                false,
+            );
+            let schema = Arc::new(Schema::new(vec![field]));
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(list_array)])
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let sc_guard = self.session_context.read().await;
+            let df = sc_guard
+                .read_batch(batch)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let encoded = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(vec![Response::Query(encoded)]);
+        }
+
+        // Intercept SET TIME ZONE commands to handle them directly.
+        if query_lower.starts_with("set time zone") {
+            let parts: Vec<&str> = query_trimmed.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let tz = parts[3].trim_matches('\'').trim_matches('"');
+                let object_name =
+                    ObjectName(vec![ObjectNamePart::Identifier(Ident::new("timezone"))]);
+                let expr = Expr::Value(
+                    sqlparser::ast::Value::SingleQuotedString(tz.to_string()).into(),
+                );
+                self.handle_set(&object_name, &[expr]).await?;
+                return Ok(vec![Response::Execution(
+                    pgwire::api::results::Tag::new("SET"),
+                )]);
+            }
+        }
+
+        // Otherwise, process the query normally.
         let dialect = GenericDialect {};
         let stmts = SqlParser::parse_sql(&dialect, query)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -382,12 +398,12 @@ impl SimpleQueryHandler for DfSessionService {
                 } => {
                     let var = match variables {
                         sqlparser::ast::OneOrManyWithParens::One(ref name) => name,
-                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => {
-                            names.first().unwrap()
-                        }
+                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
                     };
                     self.handle_set(var, &value).await?;
-                    responses.push(Response::Execution(pgwire::api::results::Tag::new("SET")));
+                    responses.push(Response::Execution(
+                        pgwire::api::results::Tag::new("SET"),
+                    ));
                 }
                 Statement::ShowVariable { variable } => {
                     let resp = self.handle_show(&variable).await?;
@@ -427,7 +443,8 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let plan = &target.statement;
         let schema = plan.schema();
-        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
+        let fields =
+            datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
         let params = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -485,7 +502,9 @@ impl ExtendedQueryHandler for DfSessionService {
                     sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
                 };
                 self.handle_set(var, value).await?;
-                return Ok(Response::Execution(pgwire::api::results::Tag::new("SET")));
+                return Ok(Response::Execution(
+                    pgwire::api::results::Tag::new("SET"),
+                ));
             }
         } else if stmt_upper.starts_with("SHOW ") {
             let dialect = GenericDialect {};
@@ -497,7 +516,7 @@ impl ExtendedQueryHandler for DfSessionService {
             }
         }
 
-        // Otherwise, treat it as a normal prepared statement
+        // Otherwise, treat it as a normal prepared statement.
         let plan = &portal.statement.statement;
         let param_types = plan
             .get_parameter_types()
@@ -515,15 +534,46 @@ impl ExtendedQueryHandler for DfSessionService {
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let resp = datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
+        let resp =
+            datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
 }
 
 fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<&DataType>> {
-    // Datafusion stores the parameters as a map.  In our case, the keys will be
-    // `$1`, `$2` etc.  The values will be the parameter types.
+    // Datafusion stores the parameters as a map. In our case, the keys will be
+    // `$1`, `$2` etc. The values will be the parameter types.
     let mut types_vec = types.iter().collect::<Vec<_>>();
     types_vec.sort_by(|a, b| a.0.cmp(b.0));
     types_vec.into_iter().map(|pt| pt.1.as_ref()).collect()
+}
+
+/// Register a UDF called `current_schemas` that takes a boolean and returns an array containing "public".
+fn register_current_schemas_udf(ctx: &mut SessionContext) -> datafusion::error::Result<()> {
+    let current_schemas_fn = Arc::new(move |args: &[ColumnarValue]| -> datafusion::error::Result<ColumnarValue> {
+        // We ignore the input value; just return a constant list containing "public".
+        let num_rows = match &args[0] {
+            ColumnarValue::Array(array) => array.len(),
+            ColumnarValue::Scalar(_) => 1,
+        };
+        // Build a ListArray containing "public"
+        let mut list_builder = ListBuilder::new(StringBuilder::new());
+        for _ in 0..num_rows {
+            list_builder.values().append_value("public");
+            list_builder.append(true);
+        }
+        let list_array = list_builder.finish();
+        Ok(ColumnarValue::Array(Arc::new(list_array)))
+    });
+
+    let udf = create_udf(
+        "current_schemas",
+        vec![DataType::Boolean],
+        DataType::List(Box::new(Field::new("item", DataType::Utf8, true)).into()),
+        Volatility::Immutable,
+        current_schemas_fn,
+    );
+
+    ctx.register_udf(udf);
+    Ok(())
 }
