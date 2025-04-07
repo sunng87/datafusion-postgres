@@ -1,8 +1,10 @@
+// handlers.rs
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{ListBuilder, StringArray, StringBuilder};
+use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::logical_expr::{create_udf, ColumnarValue, LogicalPlan, Volatility};
@@ -17,7 +19,7 @@ use pgwire::api::results::{
 use pgwire::api::stmt::{QueryParser, StoredStatement};
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use pgwire::error::{PgWireError, PgWireResult};
-use sqlparser::ast::{Expr, Ident, ObjectName, Statement, ObjectNamePart};
+use sqlparser::ast::{Expr, Ident, ObjectName, ObjectNamePart, Statement};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser as SqlParser;
 use tokio::sync::RwLock;
@@ -60,29 +62,33 @@ pub struct DfSessionService {
     pub session_context: Arc<RwLock<SessionContext>>,
     pub parser: Arc<Parser>,
     custom_session_vars: Arc<RwLock<HashMap<String, String>>>,
+    registered_tables: Arc<Vec<String>>,
 }
 
 impl DfSessionService {
-    pub fn new(session_context: SessionContext) -> DfSessionService {
+    pub fn new(
+        session_context: SessionContext,
+        registered_tables: Vec<String>,
+    ) -> DfSessionService {
         let session_context = Arc::new(RwLock::new(session_context));
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
+            registered_tables: Arc::new(registered_tables.clone()), // Pass to Parser
         });
         DfSessionService {
             session_context,
             parser,
             custom_session_vars: Arc::new(RwLock::new(HashMap::new())),
+            registered_tables: Arc::new(registered_tables),
         }
     }
 
-    /// Call this method to register additional UDFs (such as current_schemas)
     pub async fn register_udfs(&self) -> datafusion::error::Result<()> {
         let mut ctx = self.session_context.write().await;
         register_current_schemas_udf(&mut ctx)?;
         Ok(())
     }
 
-    /// Helper function to read a custom session variable, returning the default if not set.
     async fn session_var(&self, key: &str, default: &str) -> String {
         self.custom_session_vars
             .read()
@@ -93,7 +99,6 @@ impl DfSessionService {
     }
 
     async fn handle_set(&self, variable: &ObjectName, value: &[Expr]) -> PgWireResult<()> {
-        // Join all parts of the ObjectName so that "TIME ZONE" becomes "timezone"
         let var_name = variable
             .0
             .iter()
@@ -170,7 +175,6 @@ impl DfSessionService {
     }
 
     async fn handle_show<'a>(&self, variable: &[Ident]) -> PgWireResult<QueryResponse<'a>> {
-        // Join all identifiers so that "TIME ZONE" becomes "timezone"
         let var_name = variable
             .iter()
             .map(|ident| ident.to_string())
@@ -181,7 +185,6 @@ impl DfSessionService {
         let config = sc_guard.state().config().options().clone();
 
         let value = match var_name.as_str() {
-            // Support both "timezone" and "time" so that pgcli/psql are happy.
             "timezone" | "time" => config
                 .execution
                 .time_zone
@@ -193,12 +196,15 @@ impl DfSessionService {
             "datestyle" => self.session_var("datestyle", "ISO, MDY").await,
             "client_min_messages" => self.session_var("client_min_messages", "notice").await,
             "extra_float_digits" => self.session_var("extra_float_digits", "3").await,
-            "standard_conforming_strings" => self.session_var("standard_conforming_strings", "on").await,
+            "standard_conforming_strings" => {
+                self.session_var("standard_conforming_strings", "on").await
+            }
             "check_function_bodies" => self.session_var("check_function_bodies", "off").await,
             "transaction_read_only" => self.session_var("transaction_read_only", "off").await,
-            "transaction_isolation" => self.session_var("transaction_isolation", "read committed").await,
-
-            // *** New variables to keep psql happy ***
+            "transaction_isolation" => {
+                self.session_var("transaction_isolation", "read committed")
+                    .await
+            }
             "server_version" => "14.0".to_string(),
             "server_version_num" => "140000".to_string(),
             "server_encoding" => "UTF8".to_string(),
@@ -207,7 +213,6 @@ impl DfSessionService {
             "lc_monetary" => "en_US.UTF-8".to_string(),
             "lc_numeric" => "en_US.UTF-8".to_string(),
             "lc_time" => "en_US.UTF-8".to_string(),
-
             "all" => {
                 let mut names = Vec::new();
                 let mut values = Vec::new();
@@ -274,7 +279,6 @@ impl DfSessionService {
                     .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
                 return datatypes::encode_dataframe(df, &Format::UnifiedText).await;
             }
-
             _ => {
                 return Err(PgWireError::UserError(Box::new(
                     pgwire::error::ErrorInfo::new(
@@ -303,6 +307,7 @@ impl DfSessionService {
 
 pub struct Parser {
     pub session_context: Arc<RwLock<SessionContext>>,
+    pub registered_tables: Arc<Vec<String>>, // Add registered_tables to Parser
 }
 
 #[async_trait]
@@ -310,6 +315,40 @@ impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
     async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
+        let sql_lower = sql.to_lowercase();
+        if sql_lower.contains("pg_catalog.pg_class") {
+            let num_tables = self.registered_tables.len();
+            let oid_array =
+                StringArray::from((1..=num_tables).map(|i| i.to_string()).collect::<Vec<_>>());
+            let relname_array = StringArray::from(self.registered_tables.as_ref().clone());
+            let relnamespace_array = StringArray::from(vec!["public"; num_tables]);
+            let relkind_array = StringArray::from(vec!["r"; num_tables]);
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("oid", DataType::Utf8, false),
+                Field::new("relname", DataType::Utf8, false),
+                Field::new("relnamespace", DataType::Utf8, false),
+                Field::new("relkind", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(oid_array),
+                    Arc::new(relname_array),
+                    Arc::new(relnamespace_array),
+                    Arc::new(relkind_array),
+                ],
+            )
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+
+            let sc_guard = self.session_context.read().await;
+            let df = sc_guard
+                .read_batch(batch)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let logical_plan = df.logical_plan().clone();
+            return Ok(logical_plan);
+        }
+
         let sc_guard = self.session_context.read().await;
         let state = sc_guard.state();
         let logical_plan = state
@@ -336,25 +375,11 @@ impl SimpleQueryHandler for DfSessionService {
         let query_trimmed = query.trim();
         let query_lower = query_trimmed.to_lowercase();
 
-        // Intercept SELECT current_schemas(...) queries.
-        if query_lower.starts_with("select current_schemas(") {
-            // Build a StringArray with "public"
-            let mut string_builder = StringBuilder::new();
-            string_builder.append_value("public");
-            // Build a ListArray containing "public"
-            let mut list_builder = ListBuilder::new(StringBuilder::new());
-            list_builder.values().append_value("public");
-            list_builder.append(true);
-            let list_array = list_builder.finish();
-
-            // Define schema for a single column "current_schemas" of type List(Utf8)
-            let field = Field::new(
-                "current_schemas",
-                DataType::List(Box::new(Field::new("item", DataType::Utf8, true)).into()),
-                false,
-            );
+        if query_lower.starts_with("select") && query_lower.contains("current_schemas") {
+            let string_array = StringArray::from(vec!["public"]);
+            let field = Field::new("current_schemas", DataType::Utf8, false);
             let schema = Arc::new(Schema::new(vec![field]));
-            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(list_array)])
+            let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(string_array)])
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let sc_guard = self.session_context.read().await;
             let df = sc_guard
@@ -364,24 +389,73 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![Response::Query(encoded)]);
         }
 
-        // Intercept SET TIME ZONE commands to handle them directly.
+        if query_lower.contains("pg_catalog.pg_namespace") {
+            let nspname_array = StringArray::from(vec!["public"]);
+            let nspissystem_array = StringArray::from(vec!["false"]);
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("nspname", DataType::Utf8, false),
+                Field::new("nspissystem", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(nspname_array), Arc::new(nspissystem_array)],
+            )
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let sc_guard = self.session_context.read().await;
+            let df = sc_guard
+                .read_batch(batch)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let encoded = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(vec![Response::Query(encoded)]);
+        }
+
+        if query_lower.contains("pg_catalog.pg_class") {
+            let num_tables = self.registered_tables.len();
+            let oid_array =
+                StringArray::from((1..=num_tables).map(|i| i.to_string()).collect::<Vec<_>>());
+            let relname_array = StringArray::from(self.registered_tables.as_ref().clone());
+            let relnamespace_array = StringArray::from(vec!["public"; num_tables]);
+            let relkind_array = StringArray::from(vec!["r"; num_tables]);
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("oid", DataType::Utf8, false),
+                Field::new("relname", DataType::Utf8, false),
+                Field::new("relnamespace", DataType::Utf8, false),
+                Field::new("relkind", DataType::Utf8, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(oid_array),
+                    Arc::new(relname_array),
+                    Arc::new(relnamespace_array),
+                    Arc::new(relkind_array),
+                ],
+            )
+            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let sc_guard = self.session_context.read().await;
+            let df = sc_guard
+                .read_batch(batch)
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let encoded = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(vec![Response::Query(encoded)]);
+        }
+
         if query_lower.starts_with("set time zone") {
             let parts: Vec<&str> = query_trimmed.split_whitespace().collect();
             if parts.len() >= 4 {
                 let tz = parts[3].trim_matches('\'').trim_matches('"');
                 let object_name =
                     ObjectName(vec![ObjectNamePart::Identifier(Ident::new("timezone"))]);
-                let expr = Expr::Value(
-                    sqlparser::ast::Value::SingleQuotedString(tz.to_string()).into(),
-                );
+                let expr =
+                    Expr::Value(sqlparser::ast::Value::SingleQuotedString(tz.to_string()).into());
                 self.handle_set(&object_name, &[expr]).await?;
-                return Ok(vec![Response::Execution(
-                    pgwire::api::results::Tag::new("SET"),
-                )]);
+                return Ok(vec![Response::Execution(pgwire::api::results::Tag::new(
+                    "SET",
+                ))]);
             }
         }
 
-        // Otherwise, process the query normally.
         let dialect = GenericDialect {};
         let stmts = SqlParser::parse_sql(&dialect, query)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -398,12 +472,12 @@ impl SimpleQueryHandler for DfSessionService {
                 } => {
                     let var = match variables {
                         sqlparser::ast::OneOrManyWithParens::One(ref name) => name,
-                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
+                        sqlparser::ast::OneOrManyWithParens::Many(ref names) => {
+                            names.first().unwrap()
+                        }
                     };
                     self.handle_set(var, &value).await?;
-                    responses.push(Response::Execution(
-                        pgwire::api::results::Tag::new("SET"),
-                    ));
+                    responses.push(Response::Execution(pgwire::api::results::Tag::new("SET")));
                 }
                 Statement::ShowVariable { variable } => {
                     let resp = self.handle_show(&variable).await?;
@@ -443,8 +517,7 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let plan = &target.statement;
         let schema = plan.schema();
-        let fields =
-            datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
+        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
         let params = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -452,10 +525,17 @@ impl ExtendedQueryHandler for DfSessionService {
 
         for param_type in ordered_param_types(&params).iter() {
             if let Some(datatype) = param_type {
-                let pgtype = into_pg_type(datatype)?;
-                param_types.push(pgtype);
+                match datatype {
+                    DataType::List(inner) if matches!(inner.data_type(), DataType::Utf8) => {
+                        param_types.push(Type::TEXT_ARRAY);
+                    }
+                    _ => {
+                        let pgtype = into_pg_type(datatype)?;
+                        param_types.push(pgtype);
+                    }
+                }
             } else {
-                param_types.push(Type::UNKNOWN);
+                param_types.push(Type::TEXT_ARRAY); // Default for pgcli's relkind array
             }
         }
         Ok(DescribeStatementResponse::new(param_types, fields))
@@ -488,7 +568,6 @@ impl ExtendedQueryHandler for DfSessionService {
         let stmt_string = portal.statement.id.clone();
         let stmt_upper = stmt_string.to_uppercase();
 
-        // If the statement is a SET or SHOW, handle it here
         if stmt_upper.starts_with("SET ") {
             let dialect = GenericDialect {};
             let stmts = SqlParser::parse_sql(&dialect, &stmt_string)
@@ -502,9 +581,7 @@ impl ExtendedQueryHandler for DfSessionService {
                     sqlparser::ast::OneOrManyWithParens::Many(ref names) => names.first().unwrap(),
                 };
                 self.handle_set(var, value).await?;
-                return Ok(Response::Execution(
-                    pgwire::api::results::Tag::new("SET"),
-                ));
+                return Ok(Response::Execution(pgwire::api::results::Tag::new("SET")));
             }
         } else if stmt_upper.starts_with("SHOW ") {
             let dialect = GenericDialect {};
@@ -516,7 +593,6 @@ impl ExtendedQueryHandler for DfSessionService {
             }
         }
 
-        // Otherwise, treat it as a normal prepared statement.
         let plan = &portal.statement.statement;
         let param_types = plan
             .get_parameter_types()
@@ -534,8 +610,7 @@ impl ExtendedQueryHandler for DfSessionService {
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let resp =
-            datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
+        let resp = datatypes::encode_dataframe(dataframe, &portal.result_column_format).await?;
         Ok(Response::Query(resp))
     }
 }
@@ -548,28 +623,22 @@ fn ordered_param_types(types: &HashMap<String, Option<DataType>>) -> Vec<Option<
     types_vec.into_iter().map(|pt| pt.1.as_ref()).collect()
 }
 
-/// Register a UDF called `current_schemas` that takes a boolean and returns an array containing "public".
 fn register_current_schemas_udf(ctx: &mut SessionContext) -> datafusion::error::Result<()> {
-    let current_schemas_fn = Arc::new(move |args: &[ColumnarValue]| -> datafusion::error::Result<ColumnarValue> {
-        // We ignore the input value; just return a constant list containing "public".
-        let num_rows = match &args[0] {
-            ColumnarValue::Array(array) => array.len(),
-            ColumnarValue::Scalar(_) => 1,
-        };
-        // Build a ListArray containing "public"
-        let mut list_builder = ListBuilder::new(StringBuilder::new());
-        for _ in 0..num_rows {
-            list_builder.values().append_value("public");
-            list_builder.append(true);
-        }
-        let list_array = list_builder.finish();
-        Ok(ColumnarValue::Array(Arc::new(list_array)))
-    });
+    let current_schemas_fn = Arc::new(
+        move |args: &[ColumnarValue]| -> datafusion::error::Result<ColumnarValue> {
+            let num_rows = match &args[0] {
+                ColumnarValue::Array(array) => array.len(),
+                ColumnarValue::Scalar(_) => 1,
+            };
+            let string_array = StringArray::from(vec!["public"; num_rows]);
+            Ok(ColumnarValue::Array(Arc::new(string_array)))
+        },
+    );
 
     let udf = create_udf(
         "current_schemas",
         vec![DataType::Boolean],
-        DataType::List(Box::new(Field::new("item", DataType::Utf8, true)).into()),
+        DataType::Utf8,
         Volatility::Immutable,
         current_schemas_fn,
     );
