@@ -49,12 +49,14 @@ async fn main() {
     let opts = Opt::from_args();
 
     let session_context = SessionContext::new();
+    let mut registered_tables = Vec::new(); // Collect table names here
 
     for (table_name, table_path) in opts.csv_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_csv(table_name, table_path, CsvReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        registered_tables.push(table_name.to_string());
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
@@ -63,6 +65,7 @@ async fn main() {
             .register_json(table_name, table_path, NdJsonReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        registered_tables.push(table_name.to_string());
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
@@ -75,6 +78,7 @@ async fn main() {
             .register_arrow(table_name, table_path, ArrowReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        registered_tables.push(table_name.to_string());
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
@@ -87,6 +91,7 @@ async fn main() {
             .register_parquet(table_name, table_path, ParquetReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        registered_tables.push(table_name.to_string());
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
@@ -95,12 +100,16 @@ async fn main() {
             .register_avro(table_name, table_path, AvroReadOptions::default())
             .await
             .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+        registered_tables.push(table_name.to_string());
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
-    let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
-        session_context,
-    ))));
+    let service = DfSessionService::new(session_context, registered_tables); // Pass registered_tables
+    service
+        .register_udfs()
+        .await
+        .unwrap_or_else(|e| panic!("Failed to register UDFs: {e}"));
+    let factory = Arc::new(HandlerFactory(Arc::new(service)));
 
     let server_addr = format!("{}:{}", opts.host, opts.port);
     let listener = TcpListener::bind(&server_addr).await.unwrap();
