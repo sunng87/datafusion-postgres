@@ -18,6 +18,12 @@ use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use timezone::Tz;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
+    // Handle Dictionary types specially
+    if let DataType::Dictionary(_, value_type) = df_type {
+        // For Dictionary types, use the value type for mapping to Postgres types
+        return into_pg_type(value_type);
+    }
+
     Ok(match df_type {
         DataType::Null => Type::UNKNOWN,
         DataType::Boolean => Type::BOOL,
@@ -41,7 +47,15 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         DataType::Utf8 => Type::VARCHAR,
         DataType::LargeUtf8 => Type::TEXT,
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            match field.data_type() {
+            let field_type = field.data_type();
+
+            // Handle dictionary types in lists
+            let actual_type = match field_type {
+                DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                _ => field_type,
+            };
+
+            match actual_type {
                 DataType::Boolean => Type::BOOL_ARRAY,
                 DataType::Int8 | DataType::UInt8 => Type::CHAR_ARRAY,
                 DataType::Int16 | DataType::UInt16 => Type::INT2_ARRAY,
@@ -239,11 +253,72 @@ fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Naive
         .value_as_datetime(idx)
 }
 
+fn encode_dictionary_value(
+    encoder: &mut DataRowEncoder,
+    arr: &Arc<dyn Array>,
+    idx: usize,
+) -> Option<PgWireResult<()>> {
+    // Use pattern matching to handle dictionary arrays with different key types
+    match arr.data_type() {
+        DataType::Dictionary(key_type, _) => {
+            match key_type.as_ref() {
+                DataType::Int8 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int8Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::Int16 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int16Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::Int32 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int32Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::Int64 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int64Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::UInt8 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt8Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::UInt16 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt16Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::UInt32 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt32Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                DataType::UInt64 => {
+                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt64Type>>()?;
+                    let key = dict.keys().value(idx) as usize;
+                    Some(encode_value(encoder, dict.values(), key))
+                }
+                _ => None
+            }
+        }
+        _ => None
+    }
+}
+
 fn encode_value(
     encoder: &mut DataRowEncoder,
     arr: &Arc<dyn Array>,
     idx: usize,
 ) -> PgWireResult<()> {
+    // Handle dictionary encoding by extracting the actual value from the dictionary
+    if let Some(result) = encode_dictionary_value(encoder, arr, idx) {
+        return result;
+    }
+
     match arr.data_type() {
         DataType::Null => encoder.encode_field(&None::<i8>)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx))?,
@@ -347,7 +422,13 @@ fn encode_value(
         },
 
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            match field.data_type() {
+            // Extract the inner type, handling dictionaries by getting the value type
+            let field_type = match field.data_type() {
+                DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                data_type => data_type,
+            };
+
+            match field_type {
                 DataType::Null => encoder.encode_field(&None::<i8>)?,
                 DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
                 DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
