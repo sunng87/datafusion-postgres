@@ -258,50 +258,37 @@ fn encode_dictionary_value(
     arr: &Arc<dyn Array>,
     idx: usize,
 ) -> Option<PgWireResult<()>> {
-    // Use pattern matching to handle dictionary arrays with different key types
+    // First, extract the dictionary value type
+    let value_type = match arr.data_type() {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        _ => return None,
+    };
+
+    // Handle different key types with a macro to reduce repetition
+    macro_rules! handle_dict_type {
+        ($key_type:ty) => {{
+            let dict = arr.as_any().downcast_ref::<DictionaryArray<$key_type>>()?;
+            let key = dict.keys().value(idx) as usize;
+            // If the dictionary value is out of bounds, return None
+            if key >= dict.values().len() {
+                return None;
+            }
+            Some(encode_value(encoder, dict.values(), key))
+        }};
+    }
+
+    // Dispatch based on the key type
     match arr.data_type() {
         DataType::Dictionary(key_type, _) => {
             match key_type.as_ref() {
-                DataType::Int8 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int8Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::Int16 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int16Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::Int32 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int32Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::Int64 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<Int64Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::UInt8 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt8Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::UInt16 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt16Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::UInt32 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt32Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
-                DataType::UInt64 => {
-                    let dict = arr.as_any().downcast_ref::<DictionaryArray<UInt64Type>>()?;
-                    let key = dict.keys().value(idx) as usize;
-                    Some(encode_value(encoder, dict.values(), key))
-                }
+                DataType::Int8 => handle_dict_type!(Int8Type),
+                DataType::Int16 => handle_dict_type!(Int16Type),
+                DataType::Int32 => handle_dict_type!(Int32Type),
+                DataType::Int64 => handle_dict_type!(Int64Type),
+                DataType::UInt8 => handle_dict_type!(UInt8Type),
+                DataType::UInt16 => handle_dict_type!(UInt16Type),
+                DataType::UInt32 => handle_dict_type!(UInt32Type),
+                DataType::UInt64 => handle_dict_type!(UInt64Type),
                 _ => None
             }
         }
@@ -714,7 +701,15 @@ pub(crate) fn df_schema_to_pg_fields(
         .iter()
         .enumerate()
         .map(|(idx, f)| {
-            let pg_type = into_pg_type(f.data_type())?;
+            // Get the actual data type, unwrapping any dictionary type
+            let data_type = match f.data_type() {
+                DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                other_type => other_type,
+            };
+            
+            // Convert to PostgreSQL type using the unwrapped type
+            let pg_type = into_pg_type(data_type)?;
+            
             Ok(FieldInfo::new(
                 f.name().into(),
                 None,
@@ -792,7 +787,12 @@ where
         if let Some(ty) = pg_type_hint {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
-            into_pg_type(infer_type)
+            // If inferenced type is a dictionary, use the value type
+            let actual_type = match infer_type {
+                DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                other_type => other_type,
+            };
+            into_pg_type(actual_type)
         } else {
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "FATAL".to_string(),
