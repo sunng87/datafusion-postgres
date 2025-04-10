@@ -4,7 +4,7 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::SessionContext;
-use datafusion_postgres::{DfSessionService, HandlerFactory};
+use datafusion_postgres::{DfSessionService, HandlerFactory}; // Assuming the crate name is `datafusion_postgres`
 use pgwire::tokio::process_socket;
 use structopt::StructOpt;
 use tokio::net::TcpListener;
@@ -12,7 +12,7 @@ use tokio::net::TcpListener;
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "datafusion-postgres",
-    about = "A postgres interface for datatfusion. Serve any CSV/JSON/Arrow files as tables."
+    about = "A postgres interface for datafusion. Serve any CSV/JSON/Arrow files as tables."
 )]
 struct Opt {
     /// CSV files to register as table, using syntax `table_name:file_path`
@@ -45,27 +45,30 @@ fn parse_table_def(table_def: &str) -> (&str, &str) {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opts = Opt::from_args();
 
     let session_context = SessionContext::new();
 
+    // Register CSV tables
     for (table_name, table_path) in opts.csv_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_csv(table_name, table_path, CsvReadOptions::default())
             .await
-            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+            .map_err(|e| format!("Failed to register CSV table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
+    // Register JSON tables
     for (table_name, table_path) in opts.json_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_json(table_name, table_path, NdJsonReadOptions::default())
             .await
-            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+            .map_err(|e| format!("Failed to register JSON table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
+    // Register Arrow tables
     for (table_name, table_path) in opts
         .arrow_tables
         .iter()
@@ -74,10 +77,11 @@ async fn main() {
         session_context
             .register_arrow(table_name, table_path, ArrowReadOptions::default())
             .await
-            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+            .map_err(|e| format!("Failed to register Arrow table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
+    // Register Parquet tables
     for (table_name, table_path) in opts
         .parquet_tables
         .iter()
@@ -86,29 +90,46 @@ async fn main() {
         session_context
             .register_parquet(table_name, table_path, ParquetReadOptions::default())
             .await
-            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+            .map_err(|e| format!("Failed to register Parquet table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
+    // Register Avro tables
     for (table_name, table_path) in opts.avro_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
             .register_avro(table_name, table_path, AvroReadOptions::default())
             .await
-            .unwrap_or_else(|e| panic!("Failed to register table: {table_name}, {e}"));
+            .map_err(|e| format!("Failed to register Avro table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
+    // Get the first catalog name from the session context
+    let catalog_name = session_context
+        .catalog_names() // Fixed: Removed .catalog_list()
+        .first()
+        .cloned();
+
+    // Create the handler factory with the session context and catalog name
     let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
         session_context,
+        catalog_name,
     ))));
 
+    // Bind to the specified host and port
     let server_addr = format!("{}:{}", opts.host, opts.port);
-    let listener = TcpListener::bind(&server_addr).await.unwrap();
-    println!("Listening to {}", server_addr);
-    loop {
-        let incoming_socket = listener.accept().await.unwrap();
-        let factory_ref = factory.clone();
+    let listener = TcpListener::bind(&server_addr).await?;
+    println!("Listening on {}", server_addr);
 
-        tokio::spawn(async move { process_socket(incoming_socket.0, None, factory_ref).await });
+    // Accept incoming connections
+    loop {
+        let (socket, addr) = listener.accept().await?;
+        let factory_ref = factory.clone();
+        println!("Accepted connection from {}", addr);
+
+        tokio::spawn(async move {
+            if let Err(e) = process_socket(socket, None, factory_ref).await {
+                eprintln!("Error processing socket: {}", e);
+            }
+        });
     }
 }
