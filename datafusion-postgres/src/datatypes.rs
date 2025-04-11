@@ -348,13 +348,7 @@ fn encode_value(
         },
 
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            // Extract the inner type, handling dictionaries by getting the value type
-            let field_type = match field.data_type() {
-                DataType::Dictionary(_, value_type) => value_type.as_ref(),
-                data_type => data_type,
-            };
-
-            match field_type {
+            match field.data_type() {
                 DataType::Null => encoder.encode_field(&None::<i8>)?,
                 DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
                 DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
