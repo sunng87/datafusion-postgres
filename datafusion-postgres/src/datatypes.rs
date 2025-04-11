@@ -18,12 +18,6 @@ use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use timezone::Tz;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
-    // Handle Dictionary types specially
-    if let DataType::Dictionary(_, value_type) = df_type {
-        // For Dictionary types, use the value type for mapping to Postgres types
-        return into_pg_type(value_type);
-    }
-
     Ok(match df_type {
         DataType::Null => Type::UNKNOWN,
         DataType::Boolean => Type::BOOL,
@@ -86,6 +80,7 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
             }
         }
         DataType::Utf8View => Type::TEXT,
+        DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -253,59 +248,12 @@ fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Naive
         .value_as_datetime(idx)
 }
 
-fn encode_dictionary_value(
-    encoder: &mut DataRowEncoder,
-    arr: &Arc<dyn Array>,
-    idx: usize,
-) -> Option<PgWireResult<()>> {
-    // First, extract the dictionary value type
-    let value_type = match arr.data_type() {
-        DataType::Dictionary(_, value_type) => value_type.as_ref(),
-        _ => return None,
-    };
-
-    // Handle different key types with a macro to reduce repetition
-    macro_rules! handle_dict_type {
-        ($key_type:ty) => {{
-            let dict = arr.as_any().downcast_ref::<DictionaryArray<$key_type>>()?;
-            let key = dict.keys().value(idx) as usize;
-            // If the dictionary value is out of bounds, return None
-            if key >= dict.values().len() {
-                return None;
-            }
-            Some(encode_value(encoder, dict.values(), key))
-        }};
-    }
-
-    // Dispatch based on the key type
-    match arr.data_type() {
-        DataType::Dictionary(key_type, _) => {
-            match key_type.as_ref() {
-                DataType::Int8 => handle_dict_type!(Int8Type),
-                DataType::Int16 => handle_dict_type!(Int16Type),
-                DataType::Int32 => handle_dict_type!(Int32Type),
-                DataType::Int64 => handle_dict_type!(Int64Type),
-                DataType::UInt8 => handle_dict_type!(UInt8Type),
-                DataType::UInt16 => handle_dict_type!(UInt16Type),
-                DataType::UInt32 => handle_dict_type!(UInt32Type),
-                DataType::UInt64 => handle_dict_type!(UInt64Type),
-                _ => None
-            }
-        }
-        _ => None
-    }
-}
 
 fn encode_value(
     encoder: &mut DataRowEncoder,
     arr: &Arc<dyn Array>,
     idx: usize,
 ) -> PgWireResult<()> {
-    // Handle dictionary encoding by extracting the actual value from the dictionary
-    if let Some(result) = encode_dictionary_value(encoder, arr, idx) {
-        return result;
-    }
-
     match arr.data_type() {
         DataType::Null => encoder.encode_field(&None::<i8>)?,
         DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx))?,
@@ -677,6 +625,42 @@ fn encode_value(
                 }
             }
         }
+        DataType::Dictionary(_, value_type) => {
+            // Get the dictionary values, ignoring keys
+            // We'll use Int32Type as a common key type, but we're only interested in values
+            macro_rules! get_dict_values {
+                ($key_type:ty) => {
+                    arr.as_any()
+                        .downcast_ref::<DictionaryArray<$key_type>>()
+                        .map(|dict| dict.values())
+                };
+            }
+
+            // Try to extract values using different key types
+            let values = get_dict_values!(Int8Type)
+                .or_else(|| get_dict_values!(Int16Type))
+                .or_else(|| get_dict_values!(Int32Type))
+                .or_else(|| get_dict_values!(Int64Type))
+                .or_else(|| get_dict_values!(UInt8Type))
+                .or_else(|| get_dict_values!(UInt16Type))
+                .or_else(|| get_dict_values!(UInt32Type))
+                .or_else(|| get_dict_values!(UInt64Type))
+                .ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "XX000".to_owned(),
+                        format!("Unsupported dictionary key type for value type {}", value_type),
+                    )))
+                })?;
+
+            // If the dictionary has only one value, treat it as a primitive
+            if values.len() == 1 {
+                encode_value(encoder, values, 0)?
+            } else {
+                // Otherwise, use value directly indexed by values array
+                encode_value(encoder, values, idx)?
+            }
+        }
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -706,10 +690,10 @@ pub(crate) fn df_schema_to_pg_fields(
                 DataType::Dictionary(_, value_type) => value_type.as_ref(),
                 other_type => other_type,
             };
-            
+
             // Convert to PostgreSQL type using the unwrapped type
             let pg_type = into_pg_type(data_type)?;
-            
+
             Ok(FieldInfo::new(
                 f.name().into(),
                 None,
