@@ -765,12 +765,7 @@ where
         if let Some(ty) = pg_type_hint {
             Ok(ty.clone())
         } else if let Some(infer_type) = inferenced_type {
-            // If inferenced type is a dictionary, use the value type
-            let actual_type = match infer_type {
-                DataType::Dictionary(_, value_type) => value_type.as_ref(),
-                other_type => other_type,
-            };
-            into_pg_type(actual_type)
+            into_pg_type(infer_type)
         } else {
             Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "FATAL".to_string(),
