@@ -673,9 +673,7 @@ pub(crate) fn df_schema_to_pg_fields(
         .iter()
         .enumerate()
         .map(|(idx, f)| {
-            // Convert to PostgreSQL type using the unwrapped type
             let pg_type = into_pg_type(f.data_type())?;
-
             Ok(FieldInfo::new(
                 f.name().into(),
                 None,
