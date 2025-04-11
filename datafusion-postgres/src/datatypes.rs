@@ -679,14 +679,8 @@ pub(crate) fn df_schema_to_pg_fields(
         .iter()
         .enumerate()
         .map(|(idx, f)| {
-            // Get the actual data type, unwrapping any dictionary type
-            let data_type = match f.data_type() {
-                DataType::Dictionary(_, value_type) => value_type.as_ref(),
-                other_type => other_type,
-            };
-
             // Convert to PostgreSQL type using the unwrapped type
-            let pg_type = into_pg_type(data_type)?;
+            let pg_type = into_pg_type(f.data_type())?;
 
             Ok(FieldInfo::new(
                 f.name().into(),
