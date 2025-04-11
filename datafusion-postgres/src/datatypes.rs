@@ -41,15 +41,7 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         DataType::Utf8 => Type::VARCHAR,
         DataType::LargeUtf8 => Type::TEXT,
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            let field_type = field.data_type();
-
-            // Handle dictionary types in lists
-            let actual_type = match field_type {
-                DataType::Dictionary(_, value_type) => value_type.as_ref(),
-                _ => field_type,
-            };
-
-            match actual_type {
+            match field.data_type() {
                 DataType::Boolean => Type::BOOL_ARRAY,
                 DataType::Int8 | DataType::UInt8 => Type::CHAR_ARRAY,
                 DataType::Int16 | DataType::UInt16 => Type::INT2_ARRAY,
@@ -247,7 +239,6 @@ fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Naive
         .unwrap()
         .value_as_datetime(idx)
 }
-
 
 fn encode_value(
     encoder: &mut DataRowEncoder,
@@ -649,7 +640,10 @@ fn encode_value(
                     PgWireError::UserError(Box::new(ErrorInfo::new(
                         "ERROR".to_owned(),
                         "XX000".to_owned(),
-                        format!("Unsupported dictionary key type for value type {}", value_type),
+                        format!(
+                            "Unsupported dictionary key type for value type {}",
+                            value_type
+                        ),
                     )))
                 })?;
 
