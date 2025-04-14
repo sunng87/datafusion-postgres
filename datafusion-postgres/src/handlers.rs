@@ -93,8 +93,11 @@ impl SimpleQueryHandler for DfSessionService {
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            // Get the number of rows affected (typically 1 for INSERT)
-            let rows_affected = result.iter().map(|batch| batch.num_rows()).sum::<usize>();
+            // Extract count field from the first batch
+            let rows_affected = result.first()
+                .and_then(|batch| batch.column_by_name("count"))
+                .and_then(|col| col.as_any().downcast_ref::<datafusion::arrow::array::UInt64Array>())
+                .map_or(0, |array| array.value(0) as usize);
 
             // Create INSERT tag with the affected row count
             let tag = Tag::new("INSERT").with_oid(0).with_rows(rows_affected);
