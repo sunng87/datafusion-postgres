@@ -72,6 +72,7 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
             }
         }
         DataType::Utf8View => Type::TEXT,
+        DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -607,6 +608,45 @@ fn encode_value(
                         ),
                     ))))
                 }
+            }
+        }
+        DataType::Dictionary(_, value_type) => {
+            // Get the dictionary values, ignoring keys
+            // We'll use Int32Type as a common key type, but we're only interested in values
+            macro_rules! get_dict_values {
+                ($key_type:ty) => {
+                    arr.as_any()
+                        .downcast_ref::<DictionaryArray<$key_type>>()
+                        .map(|dict| dict.values())
+                };
+            }
+
+            // Try to extract values using different key types
+            let values = get_dict_values!(Int8Type)
+                .or_else(|| get_dict_values!(Int16Type))
+                .or_else(|| get_dict_values!(Int32Type))
+                .or_else(|| get_dict_values!(Int64Type))
+                .or_else(|| get_dict_values!(UInt8Type))
+                .or_else(|| get_dict_values!(UInt16Type))
+                .or_else(|| get_dict_values!(UInt32Type))
+                .or_else(|| get_dict_values!(UInt64Type))
+                .ok_or_else(|| {
+                    PgWireError::UserError(Box::new(ErrorInfo::new(
+                        "ERROR".to_owned(),
+                        "XX000".to_owned(),
+                        format!(
+                            "Unsupported dictionary key type for value type {}",
+                            value_type
+                        ),
+                    )))
+                })?;
+
+            // If the dictionary has only one value, treat it as a primitive
+            if values.len() == 1 {
+                encode_value(encoder, values, 0)?
+            } else {
+                // Otherwise, use value directly indexed by values array
+                encode_value(encoder, values, idx)?
             }
         }
         _ => {
