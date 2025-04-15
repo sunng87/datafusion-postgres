@@ -94,9 +94,13 @@ impl SimpleQueryHandler for DfSessionService {
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
             // Extract count field from the first batch
-            let rows_affected = result.first()
+            let rows_affected = result
+                .first()
                 .and_then(|batch| batch.column_by_name("count"))
-                .and_then(|col| col.as_any().downcast_ref::<datafusion::arrow::array::UInt64Array>())
+                .and_then(|col| {
+                    col.as_any()
+                        .downcast_ref::<datafusion::arrow::array::UInt64Array>()
+                })
                 .map_or(0, |array| array.value(0) as usize);
 
             // Create INSERT tag with the affected row count
