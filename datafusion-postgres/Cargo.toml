@@ -17,6 +17,7 @@ readme = "../README.md"
 
 [dependencies]
 pgwire = { workspace = true }
+postgres-types = { workspace = true }
 datafusion = { workspace = true }
 tokio = { version = "1.45", features = ["sync"] }
 arrow = "54.2.0"

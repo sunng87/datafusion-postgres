@@ -15,6 +15,7 @@ use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use postgres_types::Kind;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::{Decimal, Error};
 use timezone::Tz;
@@ -65,6 +66,12 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
                 DataType::Float64 => Type::FLOAT8_ARRAY,
                 DataType::Utf8 => Type::VARCHAR_ARRAY,
                 DataType::LargeUtf8 => Type::TEXT_ARRAY,
+                struct_type @ DataType::Struct(_) => Type::new(
+                    Type::RECORD_ARRAY.name().into(),
+                    Type::RECORD_ARRAY.oid(),
+                    Kind::Array(into_pg_type(struct_type)?),
+                    Type::RECORD_ARRAY.schema().into(),
+                ),
                 list_type => {
                     return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                         "ERROR".to_owned(),
@@ -76,6 +83,24 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         }
         DataType::Utf8View => Type::TEXT,
         DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
+        DataType::Struct(fields) => {
+            let name: String = fields
+                .iter()
+                .map(|x| x.name().clone())
+                .reduce(|a, b| a + ", " + &b)
+                .map(|x| format!("({x})"))
+                .unwrap_or("()".to_string());
+            let kind = Kind::Composite(
+                fields
+                    .iter()
+                    .map(|x| {
+                        into_pg_type(x.data_type())
+                            .map(|_type| postgres_types::Field::new(x.name().clone(), _type))
+                    })
+                    .collect::<Result<Vec<_>, PgWireError>>()?,
+            );
+            Type::new(name, Type::RECORD.oid(), kind, Type::RECORD.schema().into())
+        }
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
