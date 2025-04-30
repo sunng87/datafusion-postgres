@@ -4,7 +4,6 @@ members = ["datafusion-postgres", "datafusion-postgres-cli"]
 
 [workspace.dependencies]
 pgwire = "0.28"
-postgres-types = "0.2"
 datafusion = { version = "46", default-features = false }
 tokio = { version = "1", default-features = false }
 
