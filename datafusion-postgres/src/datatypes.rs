@@ -15,6 +15,8 @@ use pgwire::api::portal::{Format, Portal};
 use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::{Decimal, Error};
 use timezone::Tz;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
@@ -38,6 +40,7 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary => Type::BYTEA,
         DataType::Float16 | DataType::Float32 => Type::FLOAT4,
         DataType::Float64 => Type::FLOAT8,
+        DataType::Decimal128(_, _) => Type::NUMERIC,
         DataType::Utf8 => Type::VARCHAR,
         DataType::LargeUtf8 => Type::TEXT,
         DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
@@ -80,6 +83,24 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
                 format!("Unsupported Datatype {df_type}"),
             ))));
         }
+    })
+}
+
+fn get_numeric_128_value(arr: &Arc<dyn Array>, idx: usize, scale: u32) -> PgWireResult<Decimal> {
+    let array = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
+    let value = array.value(idx);
+    Decimal::try_from_i128_with_scale(value, scale).map_err(|e| {
+        let message = match e {
+            Error::ExceedsMaximumPossibleValue => "Exceeds maximum possible value",
+            Error::LessThanMinimumPossibleValue => "Less than minimum possible value",
+            Error::ScaleExceedsMaximumPrecision(_) => "Scale exceeds maximum precision",
+            _ => unreachable!(),
+        };
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "XX000".to_owned(),
+            message.to_owned(),
+        )))
     })
 }
 
@@ -258,6 +279,9 @@ fn encode_value(
         DataType::UInt64 => encoder.encode_field(&(get_u64_value(arr, idx) as i64))?,
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
+        DataType::Decimal128(_, s) => {
+            encoder.encode_field(&get_numeric_128_value(arr, idx, *s as u32)?)?
+        }
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
         DataType::Utf8View => encoder.encode_field(&get_utf8_view_value(arr, idx))?,
         DataType::LargeUtf8 => encoder.encode_field(&get_large_utf8_value(arr, idx))?,
@@ -361,6 +385,17 @@ fn encode_value(
                 DataType::UInt64 => encoder.encode_field(&get_u64_list_value(arr, idx))?,
                 DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
                 DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
+                DataType::Decimal128(_, s) => {
+                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
+                    let value: Vec<_> = list_arr
+                        .as_any()
+                        .downcast_ref::<Decimal128Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|ov| ov.map(|v| Decimal::from_i128_with_scale(v, *s as u32)))
+                        .collect();
+                    encoder.encode_field(&value)?
+                }
                 DataType::Utf8 => {
                     let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
                     let value: Vec<_> = list_arr
@@ -711,9 +746,9 @@ pub(crate) async fn encode_dataframe<'a>(
                         for col in 0..cols {
                             let array = rb.column(col);
                             if array.is_null(row) {
-                                encoder.encode_field(&None::<i8>).unwrap();
+                                encoder.encode_field(&None::<i8>)?;
                             } else {
-                                encode_value(&mut encoder, array, row).unwrap();
+                                encode_value(&mut encoder, array, row)?
                             }
                         }
                         encoder.finish()
@@ -807,6 +842,20 @@ where
             Type::FLOAT8 => {
                 let value = portal.parameter::<f64>(i, &pg_type)?;
                 deserialized_params.push(ScalarValue::Float64(value));
+            }
+            Type::NUMERIC => {
+                let value = match portal.parameter::<Decimal>(i, &pg_type)? {
+                    None => ScalarValue::Decimal128(None, 0, 0),
+                    Some(value) => {
+                        let precision = match value.mantissa() {
+                            0 => 1,
+                            m => (m.abs() as f64).log10().floor() as u8 + 1,
+                        };
+                        let scale = value.scale() as i8;
+                        ScalarValue::Decimal128(value.to_i128(), precision, scale)
+                    }
+                };
+                deserialized_params.push(value);
             }
             Type::TIMESTAMP => {
                 let value = portal.parameter::<NaiveDateTime>(i, &pg_type)?;

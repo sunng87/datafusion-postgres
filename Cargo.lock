@@ -1358,6 +1358,7 @@ dependencies = [
  "datafusion",
  "futures",
  "pgwire",
+ "rust_decimal",
 ]
 
 [[package]]
