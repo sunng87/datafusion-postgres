@@ -16,7 +16,7 @@ use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use rust_decimal::prelude::ToPrimitive;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, Error};
 use timezone::Tz;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
@@ -86,9 +86,22 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
     })
 }
 
-fn get_numeric_128_value(arr: &Arc<dyn Array>, idx: usize, scale: u32) -> Decimal {
+fn get_numeric_128_value(arr: &Arc<dyn Array>, idx: usize, scale: u32) -> PgWireResult<Decimal> {
     let array = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-    Decimal::from_i128_with_scale(array.value(idx), scale)
+    let value = array.value(idx);
+    Decimal::try_from_i128_with_scale(value, scale).map_err(|e| {
+        let message = match e {
+            Error::ExceedsMaximumPossibleValue => "Exceeds maximum possible value",
+            Error::LessThanMinimumPossibleValue => "Less than minimum possible value",
+            Error::ScaleExceedsMaximumPrecision(_) => "Scale exceeds maximum precision",
+            _ => unreachable!(),
+        };
+        PgWireError::UserError(Box::new(ErrorInfo::new(
+            "ERROR".to_owned(),
+            "XX000".to_owned(),
+            message.to_owned(),
+        )))
+    })
 }
 
 fn get_bool_value(arr: &Arc<dyn Array>, idx: usize) -> bool {
@@ -267,7 +280,7 @@ fn encode_value(
         DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
         DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
         DataType::Decimal128(_, s) => {
-            encoder.encode_field(&get_numeric_128_value(arr, idx, *s as u32))?
+            encoder.encode_field(&get_numeric_128_value(arr, idx, *s as u32)?)?
         }
         DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
         DataType::Utf8View => encoder.encode_field(&get_utf8_view_value(arr, idx))?,
@@ -379,7 +392,7 @@ fn encode_value(
                         .downcast_ref::<Decimal128Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| Decimal::from_i128_with_scale(v.unwrap(), *s as u32))
+                        .map(|ov| ov.map(|v| Decimal::from_i128_with_scale(v, *s as u32)))
                         .collect();
                     encoder.encode_field(&value)?
                 }
@@ -733,9 +746,9 @@ pub(crate) async fn encode_dataframe<'a>(
                         for col in 0..cols {
                             let array = rb.column(col);
                             if array.is_null(row) {
-                                encoder.encode_field(&None::<i8>).unwrap();
+                                encoder.encode_field(&None::<i8>)?;
                             } else {
-                                encode_value(&mut encoder, array, row).unwrap();
+                                encode_value(&mut encoder, array, row)?
                             }
                         }
                         encoder.finish()
@@ -834,12 +847,9 @@ where
                 let value = match portal.parameter::<Decimal>(i, &pg_type)? {
                     None => ScalarValue::Decimal128(None, 0, 0),
                     Some(value) => {
-                        let mantissa = value.mantissa();
-                        // Count digits in the mantissa
-                        let precision = if mantissa == 0 {
-                            1
-                        } else {
-                            (mantissa.abs() as f64).log10().floor() as u8 + 1
+                        let precision = match value.mantissa() {
+                            0 => 1,
+                            m => (m.abs() as f64).log10().floor() as u8 + 1,
                         };
                         let scale = value.scale() as i8;
                         ScalarValue::Decimal128(value.to_i128(), precision, scale)
