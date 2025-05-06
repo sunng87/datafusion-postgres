@@ -19,7 +19,7 @@ picking up unfinished items.
 
 - [x] datafusion-postgres as a CLI tool
 - [x] datafusion-postgres as a library
-- [ ] datafusion information schema: a postgres compatible `information_schema`
+- [x] datafusion information schema: a postgres compatible `information_schema`
 - [ ] datafusion pg catalog: a postgres compatible `pg_catalog`
 - [ ] data type mapping between arrow and postgres: in progress
 - [ ] additional postgres functions for datafusion
