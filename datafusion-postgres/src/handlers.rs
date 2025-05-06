@@ -216,23 +216,12 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(vec![Response::Query(resp)]);
         }
 
-        let ctx = &self.session_context;
-        let qualified_query = if !query_lower.contains(&format!("{}.", self.catalog_name))
-            && !query_lower.contains("information_schema")
-            && !query_lower.contains("pg_catalog")
-            && query_lower.contains("from")
-        {
-            query.replace(" FROM ", &format!(" FROM {}.", self.catalog_name))
-        } else {
-            query.to_string()
-        };
-
-        let df = ctx
-            .sql(&qualified_query)
+        let df = self
+            .session_context
+            .sql(query)
             .await
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        let query_lower = query.to_lowercase();
         if query_lower.starts_with("insert into") {
             // For INSERT queries, we need to execute the query to get the row count
             // and return an Execution response with the proper tag
