@@ -1,6 +1,6 @@
 import psycopg
 
-conn = psycopg.connect("host=127.0.0.1 port=5432 user=tom password=pencil dbname=localdb")
+conn = psycopg.connect("host=127.0.0.1 port=5432 user=tom password=pencil dbname=public")
 conn.autocommit = True
 
 with conn.cursor() as cur:
