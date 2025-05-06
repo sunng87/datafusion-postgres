@@ -1360,6 +1360,7 @@ dependencies = [
  "futures",
  "log",
  "pgwire",
+ "rust_decimal",
  "tokio",
 ]
 
@@ -2816,9 +2817,9 @@ checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 
 [[package]]
 name = "rust_decimal"
-version = "1.35.0"
+version = "1.37.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1790d1c4c0ca81211399e0e0af16333276f375209e71a37b67698a373db5b47a"
+checksum = "faa7de2ba56ac291bd90c6b9bece784a52ae1411f9506544b3eae36dd2356d50"
 dependencies = [
  "arrayvec",
  "borsh",
