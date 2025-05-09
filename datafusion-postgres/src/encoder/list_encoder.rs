@@ -1,6 +1,6 @@
 use std::{error::Error, str::FromStr, sync::Arc};
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::{
     array::{
@@ -17,7 +17,7 @@ use datafusion::arrow::{
 use pgwire::{
     api::results::FieldFormat,
     error::{ErrorInfo, PgWireError},
-    types::ToSqlText,
+    types::{ToSqlText, QUOTE_ESCAPE},
 };
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
@@ -362,6 +362,28 @@ pub(crate) fn encode_list(
 
             let values: Result<Vec<_>, _> = (0..arr.len())
                 .map(|row| encode_struct(&arr, row, fields, format))
+                .map(|x| {
+                    if matches!(format, FieldFormat::Text) {
+                        x.map(|opt| {
+                            opt.map(|value| {
+                                let mut w = BytesMut::new();
+                                w.put_u8(b'"');
+                                w.put_slice(
+                                    QUOTE_ESCAPE
+                                        .replace_all(
+                                            &String::from_utf8_lossy(&value.bytes),
+                                            r#"\$1"#,
+                                        )
+                                        .as_bytes(),
+                                );
+                                w.put_u8(b'"');
+                                EncodedValue { bytes: w }
+                            })
+                        })
+                    } else {
+                        x
+                    }
+                })
                 .collect();
             encode_field(&values?, type_, format)
         }
