@@ -7,7 +7,7 @@ conn: psycopg.connection.Connection = psycopg.connect(
 conn.autocommit = True
 
 
-def assert_select_all(results: list[psycopg.rows.Row]):
+def assert_select_all(results: list[psycopg.rows.Row], format: str):
     expected = [
         (
             1,
@@ -17,8 +17,16 @@ def assert_select_all(results: list[psycopg.rows.Row]):
             date(2012, 1, 1),
             datetime(2012, 1, 1),
             [1, 2],
-            (10, "x", date(2012, 1, 1), datetime(2012, 1, 1)),
-            [(10, "x", date(2012, 1, 1), datetime(2012, 1, 1))],
+            (
+                (10, "x", date(2012, 1, 1), datetime(2012, 1, 1))
+                if format == "binary"
+                else ("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000")
+            ),
+            (
+                [(10, "x", date(2012, 1, 1), datetime(2012, 1, 1))]
+                if format == "binary"
+                else [("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000")]
+            ),
         ),
         (
             2,
@@ -28,8 +36,18 @@ def assert_select_all(results: list[psycopg.rows.Row]):
             date(2012, 1, 2),
             datetime(2012, 1, 2),
             [3, 4],
-            (20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0)),
-            [(20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0))],
+            (
+                (20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0))
+                if format == "binary"
+                else ("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000")
+            ),
+            [
+                (
+                    (20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0))
+                    if format == "binary"
+                    else ("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000")
+                ),
+            ],
         ),
         (
             3,
@@ -39,8 +57,18 @@ def assert_select_all(results: list[psycopg.rows.Row]):
             date(2012, 1, 3),
             datetime(2012, 1, 3),
             [5, 6],
-            (30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0)),
-            [(30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0))],
+            (
+                (30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0))
+                if format == "binary"
+                else ("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000")
+            ),
+            [
+                (
+                    (30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0))
+                    if format == "binary"
+                    else ("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000")
+                ),
+            ],
         ),
     ]
 
@@ -69,9 +97,9 @@ with conn.cursor(binary=False) as cur:
 with conn.cursor(binary=True) as cur:
     cur.execute("SELECT * FROM all_types")
     results = cur.fetchall()
-    assert_select_all(results)
+    assert_select_all(results, "binary")
 
 with conn.cursor(binary=False) as cur:
     cur.execute("SELECT * FROM all_types")
     results = cur.fetchall()
-    assert_select_all(results)
+    assert_select_all(results, "text")
