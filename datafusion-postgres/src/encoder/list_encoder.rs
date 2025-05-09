@@ -340,15 +340,26 @@ pub(crate) fn encode_list(
         },
         DataType::Struct(_) => {
             let fields = match type_.kind() {
-                postgres_types::Kind::Composite(fields) => fields,
-                _ => {
-                    return Err(Box::new(PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!("Failed to unwrap a composite type from type {}", type_),
-                    )))))
-                }
-            };
+                postgres_types::Kind::Array(struct_type_) => Ok(struct_type_),
+                _ => Err(format!(
+                    "Expected list type found type {} of kind {:?}",
+                    type_,
+                    type_.kind()
+                )),
+            }
+            .and_then(|struct_type| match struct_type.kind() {
+                postgres_types::Kind::Composite(fields) => Ok(fields),
+                _ => Err(format!(
+                    "Failed to unwrap a composite type inside from type {} kind {:?}",
+                    type_,
+                    type_.kind()
+                )),
+            })
+            .map_err(|err| {
+                let err = ErrorInfo::new("ERROR".to_owned(), "XX000".to_owned(), err);
+                Box::new(PgWireError::UserError(Box::new(err)))
+            })?;
+
             let values: Result<Vec<_>, _> = (0..arr.len())
                 .map(|row| encode_struct(&arr, row, fields, format))
                 .collect();

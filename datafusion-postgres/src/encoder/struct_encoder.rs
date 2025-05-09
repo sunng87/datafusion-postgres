@@ -18,8 +18,8 @@ pub fn encode_struct(
         return Ok(None);
     }
     let mut row_encoder = StructEncoder::new(fields.len());
-    for arr in arr.columns() {
-        let field = &fields[0];
+    for (i, arr) in arr.columns().iter().enumerate() {
+        let field = &fields[i];
         let type_ = field.type_();
         encode_value(&mut row_encoder, arr, idx, type_, format).unwrap();
     }
@@ -65,6 +65,11 @@ impl super::Encoder for StructEncoder {
                 self.row_buffer.put_slice(b",");
             }
         } else {
+            if self.curr_col == 0 && format == FieldFormat::Binary {
+                // Place Number of fields
+                self.row_buffer.put_i32(self.num_cols as i32);
+            }
+
             self.row_buffer.put_u32(data_type.oid());
             // remember the position of the 4-byte length field
             let prev_index = self.row_buffer.len();
