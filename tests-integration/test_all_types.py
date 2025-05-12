@@ -8,32 +8,46 @@ conn.autocommit = True
 
 
 def data(format: str):
-    date1 = date(2012, 1, 1) if format == "binary" else "2012-01-01"
-    date2 = date(2012, 1, 2) if format == "binary" else "2012-01-02"
-
-    timestamp1 = (
-        datetime(2012, 1, 1) if format == "binary" else "2012-01-01 00:00:00.000000"
-    )
-    timestamp2 = (
-        datetime(2012, 1, 2) if format == "binary" else "2012-01-02 00:00:00.000000"
-    )
-
     return [
         (
             1,
             1.0,
             "a",
             True,
-            date1,
-            timestamp1,
+            date(2012, 1, 1),
+            datetime(2012, 1, 1),
             [1, None, 2],
             [1.0, None, 2.0],
             ["a", None, "b"],
             [True, None, False],
-            [date1, None, date2],
-            [timestamp1, None, timestamp2],
-            (1, 1.0, "a", True, date1, timestamp1),
-            [(1, 1.0, "a", True, date1, timestamp1)],
+            [date(2012, 1, 1), None, date(2012, 1, 2)],
+            [datetime(2012, 1, 1), None, datetime(2012, 1, 2)],
+            (
+                (1, 1.0, "a", True, date(2012, 1, 1), datetime(2012, 1, 1))
+                if format == "text"
+                else (
+                    "1",
+                    "1",
+                    "a",
+                    "t",
+                    "2012-01-01",
+                    "2012-01-01 00:00:00.000000",
+                )
+            ),
+            (
+                [(1, 1.0, "a", True, date(2012, 1, 1), datetime(2012, 1, 1))]
+                if format == "text"
+                else [
+                    (
+                        "1",
+                        "1",
+                        "a",
+                        "t",
+                        "2012-01-01",
+                        "2012-01-01 00:00:00.000000",
+                    )
+                ]
+            ),
         ),
         (
             None,
@@ -48,24 +62,56 @@ def data(format: str):
             None,
             None,
             None,
-            (None, None, None, None, None, None),
-            [(None, None, None, None, None, None)],
+            (
+                (None, None, None, None, None, None)
+                if format == "text"
+                else ("", "", "", "", "", "")
+            ),
+            (
+                [(None, None, None, None, None, None)]
+                if format == "text"
+                else [("", "", "", "", "", "")]
+            ),
         ),
         (
             2,
             2.0,
             "b",
             False,
-            date2,
-            timestamp2,
+            date(2012, 1, 2),
+            datetime(2012, 1, 2),
             None,
             None,
             None,
             None,
             None,
             None,
-            (2, 2.0, "b", False, date2, timestamp2),
-            [(2, 2.0, "b", False, date2, timestamp2)],
+            (
+                (2, 2.0, "b", False, date(2012, 1, 2), datetime(2012, 1, 2))
+                if format == "text"
+                else (
+                    "2",
+                    "2",
+                    "b",
+                    "f",
+                    "2012-01-02",
+                    "2012-01-02 00:00:00.000000",
+                )
+            ),
+            (
+                [(2, 2.0, "b", False, date(2012, 1, 2), datetime(2012, 1, 2))]
+                if format == "text"
+                else [
+                    (
+                        "2",
+                        "2",
+                        "b",
+                        "f",
+                        "2012-01-02",
+                        "2012-01-02 00:00:00.000000",
+                    )
+                ]
+            ),
         ),
     ]
 
@@ -98,9 +144,9 @@ with conn.cursor(binary=False) as cur:
 with conn.cursor(binary=True) as cur:
     cur.execute("SELECT * FROM all_types")
     results = cur.fetchall()
-    assert_select_all(results, "binary")
+    assert_select_all(results, "text")
 
-# with conn.cursor(binary=False) as cur:
-#     cur.execute("SELECT * FROM all_types")
-#     results = cur.fetchall()
-#     assert_select_all(results, "text")
+with conn.cursor(binary=False) as cur:
+    cur.execute("SELECT * FROM all_types")
+    results = cur.fetchall()
+    assert_select_all(results, "binary")
