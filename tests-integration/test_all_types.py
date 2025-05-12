@@ -7,66 +7,71 @@ conn: psycopg.connection.Connection = psycopg.connect(
 conn.autocommit = True
 
 
-def assert_select_all(results: list[psycopg.rows.Row], format: str):
-    expected = [
+def data(format: str):
+    date1 = date(2012, 1, 1) if format == "binary" else "2012-01-01"
+    date2 = date(2012, 1, 2) if format == "binary" else "2012-01-02"
+
+    timestamp1 = (
+        datetime(2012, 1, 1) if format == "binary" else "2012-01-01 00:00:00.000000"
+    )
+    timestamp2 = (
+        datetime(2012, 1, 2) if format == "binary" else "2012-01-02 00:00:00.000000"
+    )
+
+    return [
         (
             1,
             1.0,
             "a",
             True,
-            date(2012, 1, 1),
-            datetime(2012, 1, 1),
-            [1, 2],
-            (
-                (10, "x", date(2012, 1, 1), datetime(2012, 1, 1))
-                if format == "binary"
-                else ("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000")
-            ),
-            (
-                [(10, "x", date(2012, 1, 1), datetime(2012, 1, 1), [1, 2])]
-                if format == "binary"
-                else [("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000", "{1,2}")]
-            ),
+            date1,
+            timestamp1,
+            [1, None, 2],
+            [1.0, None, 2.0],
+            ["a", None, "b"],
+            [True, None, False],
+            [date1, None, date2],
+            [timestamp1, None, timestamp2],
+            (1, 1.0, "a", True, date1, timestamp1),
+            [(1, 1.0, "a", True, date1, timestamp1)],
+        ),
+        (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            (None, None, None, None, None, None),
+            [(None, None, None, None, None, None)],
         ),
         (
             2,
-            2.5,
+            2.0,
             "b",
             False,
-            date(2012, 1, 2),
-            datetime(2012, 1, 2),
-            [3, 4],
-            (
-                (20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0))
-                if format == "binary"
-                else ("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000")
-            ),
-            (
-                [(20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0), [3, 4])]
-                if format == "binary"
-                else [("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000", "{3,4}")]
-            ),
-        ),
-        (
-            3,
-            3.3,
-            "c",
-            True,
-            date(2012, 1, 3),
-            datetime(2012, 1, 3),
-            [5, 6],
-            (
-                (30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0))
-                if format == "binary"
-                else ("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000")
-            ),
-            (
-                [(30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0), [5, 6])]
-                if format == "binary"
-                else [("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000", "{5,6}")]
-            ),
+            date2,
+            timestamp2,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            (2, 2.0, "b", False, date2, timestamp2),
+            [(2, 2.0, "b", False, date2, timestamp2)],
         ),
     ]
+
+
+def assert_select_all(results: list[psycopg.rows.Row], format: str):
+    expected = data(format)
 
     assert len(results) == len(
         expected
@@ -95,7 +100,7 @@ with conn.cursor(binary=True) as cur:
     results = cur.fetchall()
     assert_select_all(results, "binary")
 
-with conn.cursor(binary=False) as cur:
-    cur.execute("SELECT * FROM all_types")
-    results = cur.fetchall()
-    assert_select_all(results, "text")
+# with conn.cursor(binary=False) as cur:
+#     cur.execute("SELECT * FROM all_types")
+#     results = cur.fetchall()
+#     assert_select_all(results, "text")

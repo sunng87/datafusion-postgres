@@ -99,20 +99,24 @@ impl ToSqlText for EncodedValue {
     }
 }
 
-fn get_bool_value(arr: &Arc<dyn Array>, idx: usize) -> bool {
-    arr.as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap()
-        .value(idx)
+fn get_bool_value(arr: &Arc<dyn Array>, idx: usize) -> Option<bool> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
 macro_rules! get_primitive_value {
     ($name:ident, $t:ty, $pt:ty) => {
-        fn $name(arr: &Arc<dyn Array>, idx: usize) -> $pt {
-            arr.as_any()
-                .downcast_ref::<PrimitiveArray<$t>>()
-                .unwrap()
-                .value(idx)
+        fn $name(arr: &Arc<dyn Array>, idx: usize) -> Option<$pt> {
+            (!arr.is_null(idx)).then(|| {
+                arr.as_any()
+                    .downcast_ref::<PrimitiveArray<$t>>()
+                    .unwrap()
+                    .value(idx)
+            })
         }
     };
 }
@@ -128,42 +132,55 @@ get_primitive_value!(get_u64_value, UInt64Type, u64);
 get_primitive_value!(get_f32_value, Float32Type, f32);
 get_primitive_value!(get_f64_value, Float64Type, f64);
 
-fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<StringViewArray>()
-        .unwrap()
-        .value(idx)
+fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
-fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap()
-        .value(idx)
+fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
-fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<LargeStringArray>()
-        .unwrap()
-        .value(idx)
+fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&str> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<LargeStringArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
-fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
-    arr.as_any()
-        .downcast_ref::<BinaryArray>()
-        .unwrap()
-        .value(idx)
+fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
-fn get_large_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
-    arr.as_any()
-        .downcast_ref::<LargeBinaryArray>()
-        .unwrap()
-        .value(idx)
+fn get_large_binary_value(arr: &Arc<dyn Array>, idx: usize) -> Option<&[u8]> {
+    (!arr.is_null(idx)).then(|| {
+        arr.as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap()
+            .value(idx)
+    })
 }
 
 fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Date32Array>()
         .unwrap()
@@ -171,6 +188,9 @@ fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
 }
 
 fn get_date64_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Date64Array>()
         .unwrap()
@@ -178,6 +198,9 @@ fn get_date64_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
 }
 
 fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Time32SecondArray>()
         .unwrap()
@@ -185,6 +208,9 @@ fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate
 }
 
 fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Time32MillisecondArray>()
         .unwrap()
@@ -192,36 +218,56 @@ fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<Naiv
 }
 
 fn get_time64_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Time64MicrosecondArray>()
         .unwrap()
         .value_as_datetime(idx)
 }
 fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
+    if arr.is_null(idx) {
+        return None;
+    }
     arr.as_any()
         .downcast_ref::<Time64NanosecondArray>()
         .unwrap()
         .value_as_datetime(idx)
 }
 
-fn get_numeric_128_value(arr: &Arc<dyn Array>, idx: usize, scale: u32) -> PgWireResult<Decimal> {
+fn get_numeric_128_value(
+    arr: &Arc<dyn Array>,
+    idx: usize,
+    scale: u32,
+) -> PgWireResult<Option<Decimal>> {
+    if arr.is_null(idx) {
+        return Ok(None);
+    }
+
     let array = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
     let value = array.value(idx);
-    Decimal::try_from_i128_with_scale(value, scale).map_err(|e| {
-        let message = match e {
-            rust_decimal::Error::ExceedsMaximumPossibleValue => "Exceeds maximum possible value",
-            rust_decimal::Error::LessThanMinimumPossibleValue => "Less than minimum possible value",
-            rust_decimal::Error::ScaleExceedsMaximumPrecision(_) => {
-                "Scale exceeds maximum precision"
-            }
-            _ => unreachable!(),
-        };
-        PgWireError::UserError(Box::new(ErrorInfo::new(
-            "ERROR".to_owned(),
-            "XX000".to_owned(),
-            message.to_owned(),
-        )))
-    })
+    Decimal::try_from_i128_with_scale(value, scale)
+        .map_err(|e| {
+            let message = match e {
+                rust_decimal::Error::ExceedsMaximumPossibleValue => {
+                    "Exceeds maximum possible value"
+                }
+                rust_decimal::Error::LessThanMinimumPossibleValue => {
+                    "Less than minimum possible value"
+                }
+                rust_decimal::Error::ScaleExceedsMaximumPrecision(_) => {
+                    "Scale exceeds maximum precision"
+                }
+                _ => unreachable!(),
+            };
+            PgWireError::UserError(Box::new(ErrorInfo::new(
+                "ERROR".to_owned(),
+                "XX000".to_owned(),
+                message.to_owned(),
+            )))
+        })
+        .map(Some)
 }
 
 fn encode_value<T: Encoder>(
@@ -249,12 +295,12 @@ fn encode_value<T: Encoder>(
             encoder.encode_field_with_type_and_format(&get_i64_value(arr, idx), type_, format)?
         }
         DataType::UInt8 => encoder.encode_field_with_type_and_format(
-            &(get_u8_value(arr, idx) as i8),
+            &(get_u8_value(arr, idx).map(|x| x as i8)),
             type_,
             format,
         )?,
         DataType::UInt16 => encoder.encode_field_with_type_and_format(
-            &(get_u16_value(arr, idx) as i16),
+            &(get_u16_value(arr, idx).map(|x| x as i16)),
             type_,
             format,
         )?,
@@ -262,7 +308,7 @@ fn encode_value<T: Encoder>(
             encoder.encode_field_with_type_and_format(&get_u32_value(arr, idx), type_, format)?
         }
         DataType::UInt64 => encoder.encode_field_with_type_and_format(
-            &(get_u64_value(arr, idx) as i64),
+            &(get_u64_value(arr, idx).map(|x| x as i64)),
             type_,
             format,
         )?,
@@ -332,6 +378,13 @@ fn encode_value<T: Encoder>(
         },
         DataType::Timestamp(unit, timezone) => match unit {
             TimeUnit::Second => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field_with_type_and_format(
+                        &None::<NaiveDateTime>,
+                        type_,
+                        format,
+                    );
+                }
                 let ts_array = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
                 if let Some(tz) = timezone {
                     let tz = Tz::from_str(tz.as_ref())
@@ -342,10 +395,17 @@ fn encode_value<T: Encoder>(
                     encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?
+                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 }
             }
             TimeUnit::Millisecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field_with_type_and_format(
+                        &None::<NaiveDateTime>,
+                        type_,
+                        format,
+                    );
+                }
                 let ts_array = arr
                     .as_any()
                     .downcast_ref::<TimestampMillisecondArray>()
@@ -359,10 +419,17 @@ fn encode_value<T: Encoder>(
                     encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?
+                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 }
             }
             TimeUnit::Microsecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field_with_type_and_format(
+                        &None::<NaiveDateTime>,
+                        type_,
+                        format,
+                    );
+                }
                 let ts_array = arr
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
@@ -376,10 +443,17 @@ fn encode_value<T: Encoder>(
                     encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?
+                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 }
             }
             TimeUnit::Nanosecond => {
+                if arr.is_null(idx) {
+                    return encoder.encode_field_with_type_and_format(
+                        &None::<NaiveDateTime>,
+                        type_,
+                        format,
+                    );
+                }
                 let ts_array = arr
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
@@ -393,11 +467,14 @@ fn encode_value<T: Encoder>(
                     encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 } else {
                     let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field_with_type_and_format(&value, type_, format)?
+                    encoder.encode_field_with_type_and_format(&value, type_, format)?;
                 }
             }
         },
         DataType::List(_) | DataType::FixedSizeList(_, _) | DataType::LargeList(_) => {
+            if arr.is_null(idx) {
+                return encoder.encode_field_with_type_and_format(&None::<&[i8]>, type_, format);
+            }
             let array = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
             let value = encode_list(array, type_, format)?;
             encoder.encode_field_with_type_and_format(&value, type_, format)?
@@ -417,6 +494,9 @@ fn encode_value<T: Encoder>(
             encoder.encode_field_with_type_and_format(&value, type_, format)?
         }
         DataType::Dictionary(_, value_type) => {
+            if arr.is_null(idx) {
+                return encoder.encode_field_with_type_and_format(&None::<i8>, type_, format);
+            }
             // Get the dictionary values, ignoring keys
             // We'll use Int32Type as a common key type, but we're only interested in values
             macro_rules! get_dict_values {
@@ -467,5 +547,6 @@ fn encode_value<T: Encoder>(
             ))))
         }
     }
+
     Ok(())
 }

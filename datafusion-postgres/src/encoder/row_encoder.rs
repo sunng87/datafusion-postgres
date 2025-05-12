@@ -32,14 +32,10 @@ impl RowEncoder {
         let mut encoder = DataRowEncoder::new(self.fields.clone());
         for col in 0..self.rb.num_columns() {
             let array = self.rb.column(col);
-            if array.is_null(self.curr_idx) {
-                encoder.encode_field(&None::<i8>).unwrap();
-            } else {
-                let field = &self.fields[col];
-                let type_ = field.datatype();
-                let format = field.format();
-                encode_value(&mut encoder, array, self.curr_idx, type_, format).unwrap();
-            }
+            let field = &self.fields[col];
+            let type_ = field.datatype();
+            let format = field.format();
+            encode_value(&mut encoder, array, self.curr_idx, type_, format).unwrap();
         }
         self.curr_idx += 1;
         Some(encoder.finish())

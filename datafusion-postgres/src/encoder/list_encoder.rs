@@ -1,5 +1,12 @@
 use std::{error::Error, str::FromStr, sync::Arc};
 
+use arrow::{
+    datatypes::{
+        Date32Type, Date64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        Time64NanosecondType,
+    },
+    temporal_conversions::{as_date, as_time},
+};
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::{
@@ -152,6 +159,7 @@ pub(crate) fn encode_list(
                 .downcast_ref::<Date32Array>()
                 .unwrap()
                 .iter()
+                .map(|val| val.and_then(|x| as_date::<Date32Type>(x as i64)))
                 .collect();
             encode_field(&value, type_, format)
         }
@@ -161,6 +169,7 @@ pub(crate) fn encode_list(
                 .downcast_ref::<Date64Array>()
                 .unwrap()
                 .iter()
+                .map(|val| val.and_then(as_date::<Date64Type>))
                 .collect();
             encode_field(&value, type_, format)
         }
@@ -171,6 +180,7 @@ pub(crate) fn encode_list(
                     .downcast_ref::<Time32SecondArray>()
                     .unwrap()
                     .iter()
+                    .map(|val| val.and_then(|x| as_time::<Time32SecondType>(x as i64)))
                     .collect();
                 encode_field(&value, type_, format)
             }
@@ -180,6 +190,7 @@ pub(crate) fn encode_list(
                     .downcast_ref::<Time32MillisecondArray>()
                     .unwrap()
                     .iter()
+                    .map(|val| val.and_then(|x| as_time::<Time32MillisecondType>(x as i64)))
                     .collect();
                 encode_field(&value, type_, format)
             }
@@ -194,6 +205,7 @@ pub(crate) fn encode_list(
                     .downcast_ref::<Time64MicrosecondArray>()
                     .unwrap()
                     .iter()
+                    .map(|val| val.and_then(as_time::<Time64MicrosecondType>))
                     .collect();
                 encode_field(&value, type_, format)
             }
@@ -203,6 +215,7 @@ pub(crate) fn encode_list(
                     .downcast_ref::<Time64NanosecondArray>()
                     .unwrap()
                     .iter()
+                    .map(|val| val.and_then(as_time::<Time64NanosecondType>))
                     .collect();
                 encode_field(&value, type_, format)
             }
