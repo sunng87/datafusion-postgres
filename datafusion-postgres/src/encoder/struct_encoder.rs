@@ -2,7 +2,11 @@ use std::{error::Error, sync::Arc};
 
 use bytes::{BufMut, BytesMut};
 use datafusion::arrow::array::{Array, StructArray};
-use pgwire::{api::results::FieldFormat, error::PgWireResult, types::ToSqlText};
+use pgwire::{
+    api::results::FieldFormat,
+    error::PgWireResult,
+    types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE},
+};
 use postgres_types::{Field, IsNull, ToSql, Type};
 
 use super::{encode_value, EncodedValue};
@@ -58,7 +62,21 @@ impl super::Encoder for StructEncoder {
             if self.curr_col == 0 {
                 self.row_buffer.put_slice(b"(");
             }
-            value.to_sql_text(data_type, &mut self.row_buffer)?;
+            // encode value in an intermediate buf
+            let mut buf = BytesMut::new();
+            value.to_sql_text(data_type, &mut buf)?;
+            let encoded_value_as_str = String::from_utf8_lossy(&buf);
+            if QUOTE_CHECK.is_match(&encoded_value_as_str) {
+                self.row_buffer.put_u8(b'"');
+                self.row_buffer.put_slice(
+                    QUOTE_ESCAPE
+                        .replace_all(&encoded_value_as_str, r#"\$1"#)
+                        .as_bytes(),
+                );
+                self.row_buffer.put_u8(b'"');
+            } else {
+                self.row_buffer.put_slice(&buf);
+            }
             if self.curr_col == self.num_cols - 1 {
                 self.row_buffer.put_slice(b")");
             } else {

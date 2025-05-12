@@ -23,9 +23,9 @@ def assert_select_all(results: list[psycopg.rows.Row], format: str):
                 else ("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000")
             ),
             (
-                [(10, "x", date(2012, 1, 1), datetime(2012, 1, 1))]
+                [(10, "x", date(2012, 1, 1), datetime(2012, 1, 1), [1, 2])]
                 if format == "binary"
-                else [("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000")]
+                else [("10", "x", "2012-01-01", "2012-01-01 00:00:00.000000", "{1,2}")]
             ),
         ),
         (
@@ -41,13 +41,11 @@ def assert_select_all(results: list[psycopg.rows.Row], format: str):
                 if format == "binary"
                 else ("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000")
             ),
-            [
-                (
-                    (20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0))
-                    if format == "binary"
-                    else ("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000")
-                ),
-            ],
+            (
+                [(20, "y", date(2012, 1, 2), datetime(2012, 1, 2, 0, 0), [3, 4])]
+                if format == "binary"
+                else [("20", "y", "2012-01-02", "2012-01-02 00:00:00.000000", "{3,4}")]
+            ),
         ),
         (
             3,
@@ -62,13 +60,11 @@ def assert_select_all(results: list[psycopg.rows.Row], format: str):
                 if format == "binary"
                 else ("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000")
             ),
-            [
-                (
-                    (30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0))
-                    if format == "binary"
-                    else ("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000")
-                ),
-            ],
+            (
+                [(30, "z", date(2012, 1, 3), datetime(2012, 1, 3, 0, 0), [5, 6])]
+                if format == "binary"
+                else [("30", "z", "2012-01-03", "2012-01-03 00:00:00.000000", "{5,6}")]
+            ),
         ),
     ]
 

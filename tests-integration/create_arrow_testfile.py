@@ -18,6 +18,7 @@ list_struct_type = pa.list_(
             pa.field("nested_str", pa.string()),
             pa.field("nested_date32", pa.date32()),
             pa.field("nested_timestamp", pa.timestamp("ms")),
+            pa.field("nested_array", pa.list_(pa.int64())),
         ]
     )
 )
@@ -81,6 +82,7 @@ data = [
                     "nested_str": "x",
                     "nested_date32": date(2012, 1, 1),
                     "nested_timestamp": datetime(2012, 1, 1),
+                    "nested_array": [1, 2],
                 }
             ],
             [
@@ -89,6 +91,7 @@ data = [
                     "nested_str": "y",
                     "nested_date32": date(2012, 1, 2),
                     "nested_timestamp": datetime(2012, 1, 2),
+                    "nested_array": [3, 4],
                 }
             ],
             [
@@ -97,6 +100,7 @@ data = [
                     "nested_str": "z",
                     "nested_date32": date(2012, 1, 3),
                     "nested_timestamp": datetime(2012, 1, 3),
+                    "nested_array": [5, 6],
                 }
             ],
         ],
