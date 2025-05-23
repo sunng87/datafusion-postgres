@@ -1,10 +1,8 @@
 use std::iter;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset};
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{DFSchema, ParamValues};
@@ -12,12 +10,15 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use futures::{stream, StreamExt};
 use pgwire::api::portal::{Format, Portal};
-use pgwire::api::results::{DataRowEncoder, FieldInfo, QueryResponse};
+use pgwire::api::results::{FieldInfo, QueryResponse};
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::data::DataRow;
+use postgres_types::Kind;
 use rust_decimal::prelude::ToPrimitive;
-use rust_decimal::{Decimal, Error};
-use timezone::Tz;
+use rust_decimal::Decimal;
+
+use crate::encoder::row_encoder::RowEncoder;
 
 pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
     Ok(match df_type {
@@ -65,6 +66,12 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
                 DataType::Float64 => Type::FLOAT8_ARRAY,
                 DataType::Utf8 => Type::VARCHAR_ARRAY,
                 DataType::LargeUtf8 => Type::TEXT_ARRAY,
+                struct_type @ DataType::Struct(_) => Type::new(
+                    Type::RECORD_ARRAY.name().into(),
+                    Type::RECORD_ARRAY.oid(),
+                    Kind::Array(into_pg_type(struct_type)?),
+                    Type::RECORD_ARRAY.schema().into(),
+                ),
                 list_type => {
                     return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                         "ERROR".to_owned(),
@@ -76,6 +83,24 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
         }
         DataType::Utf8View => Type::TEXT,
         DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
+        DataType::Struct(fields) => {
+            let name: String = fields
+                .iter()
+                .map(|x| x.name().clone())
+                .reduce(|a, b| a + ", " + &b)
+                .map(|x| format!("({x})"))
+                .unwrap_or("()".to_string());
+            let kind = Kind::Composite(
+                fields
+                    .iter()
+                    .map(|x| {
+                        into_pg_type(x.data_type())
+                            .map(|_type| postgres_types::Field::new(x.name().clone(), _type))
+                    })
+                    .collect::<Result<Vec<_>, PgWireError>>()?,
+            );
+            Type::new(name, Type::RECORD.oid(), kind, Type::RECORD.schema().into())
+        }
         _ => {
             return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
                 "ERROR".to_owned(),
@@ -84,619 +109,6 @@ pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
             ))));
         }
     })
-}
-
-fn get_numeric_128_value(arr: &Arc<dyn Array>, idx: usize, scale: u32) -> PgWireResult<Decimal> {
-    let array = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-    let value = array.value(idx);
-    Decimal::try_from_i128_with_scale(value, scale).map_err(|e| {
-        let message = match e {
-            Error::ExceedsMaximumPossibleValue => "Exceeds maximum possible value",
-            Error::LessThanMinimumPossibleValue => "Less than minimum possible value",
-            Error::ScaleExceedsMaximumPrecision(_) => "Scale exceeds maximum precision",
-            _ => unreachable!(),
-        };
-        PgWireError::UserError(Box::new(ErrorInfo::new(
-            "ERROR".to_owned(),
-            "XX000".to_owned(),
-            message.to_owned(),
-        )))
-    })
-}
-
-fn get_bool_value(arr: &Arc<dyn Array>, idx: usize) -> bool {
-    arr.as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_bool_list_value(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<bool>> {
-    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-    list_arr
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap()
-        .iter()
-        .collect()
-}
-
-macro_rules! get_primitive_value {
-    ($name:ident, $t:ty, $pt:ty) => {
-        fn $name(arr: &Arc<dyn Array>, idx: usize) -> $pt {
-            arr.as_any()
-                .downcast_ref::<PrimitiveArray<$t>>()
-                .unwrap()
-                .value(idx)
-        }
-    };
-}
-
-get_primitive_value!(get_i8_value, Int8Type, i8);
-get_primitive_value!(get_i16_value, Int16Type, i16);
-get_primitive_value!(get_i32_value, Int32Type, i32);
-get_primitive_value!(get_i64_value, Int64Type, i64);
-get_primitive_value!(get_u8_value, UInt8Type, u8);
-get_primitive_value!(get_u16_value, UInt16Type, u16);
-get_primitive_value!(get_u32_value, UInt32Type, u32);
-get_primitive_value!(get_u64_value, UInt64Type, u64);
-get_primitive_value!(get_f32_value, Float32Type, f32);
-get_primitive_value!(get_f64_value, Float64Type, f64);
-
-macro_rules! get_primitive_list_value {
-    ($name:ident, $t:ty, $pt:ty) => {
-        fn $name(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<$pt>> {
-            let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-            list_arr
-                .as_any()
-                .downcast_ref::<PrimitiveArray<$t>>()
-                .unwrap()
-                .iter()
-                .collect()
-        }
-    };
-
-    ($name:ident, $t:ty, $pt:ty, $f:expr) => {
-        fn $name(arr: &Arc<dyn Array>, idx: usize) -> Vec<Option<$pt>> {
-            let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-            list_arr
-                .as_any()
-                .downcast_ref::<PrimitiveArray<$t>>()
-                .unwrap()
-                .iter()
-                .map(|val| val.map($f))
-                .collect()
-        }
-    };
-}
-
-get_primitive_list_value!(get_i8_list_value, Int8Type, i8);
-get_primitive_list_value!(get_i16_list_value, Int16Type, i16);
-get_primitive_list_value!(get_i32_list_value, Int32Type, i32);
-get_primitive_list_value!(get_i64_list_value, Int64Type, i64);
-get_primitive_list_value!(get_u8_list_value, UInt8Type, i8, |val: u8| { val as i8 });
-get_primitive_list_value!(get_u16_list_value, UInt16Type, i16, |val: u16| {
-    val as i16
-});
-get_primitive_list_value!(get_u32_list_value, UInt32Type, u32);
-get_primitive_list_value!(get_u64_list_value, UInt64Type, i64, |val: u64| {
-    val as i64
-});
-get_primitive_list_value!(get_f32_list_value, Float32Type, f32);
-get_primitive_list_value!(get_f64_list_value, Float64Type, f64);
-
-fn get_utf8_view_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<StringViewArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_large_utf8_value(arr: &Arc<dyn Array>, idx: usize) -> &str {
-    arr.as_any()
-        .downcast_ref::<LargeStringArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
-    arr.as_any()
-        .downcast_ref::<BinaryArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_large_binary_value(arr: &Arc<dyn Array>, idx: usize) -> &[u8] {
-    arr.as_any()
-        .downcast_ref::<LargeBinaryArray>()
-        .unwrap()
-        .value(idx)
-}
-
-fn get_date32_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
-    arr.as_any()
-        .downcast_ref::<Date32Array>()
-        .unwrap()
-        .value_as_date(idx)
-}
-
-fn get_date64_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDate> {
-    arr.as_any()
-        .downcast_ref::<Date64Array>()
-        .unwrap()
-        .value_as_date(idx)
-}
-
-fn get_time32_second_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<Time32SecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_time32_millisecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<Time32MillisecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn get_time64_microsecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<Time64MicrosecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-fn get_time64_nanosecond_value(arr: &Arc<dyn Array>, idx: usize) -> Option<NaiveDateTime> {
-    arr.as_any()
-        .downcast_ref::<Time64NanosecondArray>()
-        .unwrap()
-        .value_as_datetime(idx)
-}
-
-fn encode_value(
-    encoder: &mut DataRowEncoder,
-    arr: &Arc<dyn Array>,
-    idx: usize,
-) -> PgWireResult<()> {
-    match arr.data_type() {
-        DataType::Null => encoder.encode_field(&None::<i8>)?,
-        DataType::Boolean => encoder.encode_field(&get_bool_value(arr, idx))?,
-        DataType::Int8 => encoder.encode_field(&get_i8_value(arr, idx))?,
-        DataType::Int16 => encoder.encode_field(&get_i16_value(arr, idx))?,
-        DataType::Int32 => encoder.encode_field(&get_i32_value(arr, idx))?,
-        DataType::Int64 => encoder.encode_field(&get_i64_value(arr, idx))?,
-        DataType::UInt8 => encoder.encode_field(&(get_u8_value(arr, idx) as i8))?,
-        DataType::UInt16 => encoder.encode_field(&(get_u16_value(arr, idx) as i16))?,
-        DataType::UInt32 => encoder.encode_field(&get_u32_value(arr, idx))?,
-        DataType::UInt64 => encoder.encode_field(&(get_u64_value(arr, idx) as i64))?,
-        DataType::Float32 => encoder.encode_field(&get_f32_value(arr, idx))?,
-        DataType::Float64 => encoder.encode_field(&get_f64_value(arr, idx))?,
-        DataType::Decimal128(_, s) => {
-            encoder.encode_field(&get_numeric_128_value(arr, idx, *s as u32)?)?
-        }
-        DataType::Utf8 => encoder.encode_field(&get_utf8_value(arr, idx))?,
-        DataType::Utf8View => encoder.encode_field(&get_utf8_view_value(arr, idx))?,
-        DataType::LargeUtf8 => encoder.encode_field(&get_large_utf8_value(arr, idx))?,
-        DataType::Binary => encoder.encode_field(&get_binary_value(arr, idx))?,
-        DataType::LargeBinary => encoder.encode_field(&get_large_binary_value(arr, idx))?,
-        DataType::Date32 => encoder.encode_field(&get_date32_value(arr, idx))?,
-        DataType::Date64 => encoder.encode_field(&get_date64_value(arr, idx))?,
-        DataType::Time32(unit) => match unit {
-            TimeUnit::Second => encoder.encode_field(&get_time32_second_value(arr, idx))?,
-            TimeUnit::Millisecond => {
-                encoder.encode_field(&get_time32_millisecond_value(arr, idx))?
-            }
-            _ => {}
-        },
-        DataType::Time64(unit) => match unit {
-            TimeUnit::Microsecond => {
-                encoder.encode_field(&get_time64_microsecond_value(arr, idx))?
-            }
-            TimeUnit::Nanosecond => encoder.encode_field(&get_time64_nanosecond_value(arr, idx))?,
-            _ => {}
-        },
-        DataType::Timestamp(unit, timezone) => match unit {
-            TimeUnit::Second => {
-                let ts_array = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
-                if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                    let value = ts_array
-                        .value_as_datetime_with_tz(idx, tz)
-                        .map(|d| d.fixed_offset());
-                    encoder.encode_field(&value)?;
-                } else {
-                    let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field(&value)?
-                }
-            }
-            TimeUnit::Millisecond => {
-                let ts_array = arr
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .unwrap();
-                if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                    let value = ts_array
-                        .value_as_datetime_with_tz(idx, tz)
-                        .map(|d| d.fixed_offset());
-                    encoder.encode_field(&value)?;
-                } else {
-                    let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field(&value)?
-                }
-            }
-            TimeUnit::Microsecond => {
-                let ts_array = arr
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .unwrap();
-                if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                    let value = ts_array
-                        .value_as_datetime_with_tz(idx, tz)
-                        .map(|d| d.fixed_offset());
-                    encoder.encode_field(&value)?;
-                } else {
-                    let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field(&value)?
-                }
-            }
-            TimeUnit::Nanosecond => {
-                let ts_array = arr
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .unwrap();
-                if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                    let value = ts_array
-                        .value_as_datetime_with_tz(idx, tz)
-                        .map(|d| d.fixed_offset());
-                    encoder.encode_field(&value)?;
-                } else {
-                    let value = ts_array.value_as_datetime(idx);
-                    encoder.encode_field(&value)?
-                }
-            }
-        },
-
-        DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            match field.data_type() {
-                DataType::Null => encoder.encode_field(&None::<i8>)?,
-                DataType::Boolean => encoder.encode_field(&get_bool_list_value(arr, idx))?,
-                DataType::Int8 => encoder.encode_field(&get_i8_list_value(arr, idx))?,
-                DataType::Int16 => encoder.encode_field(&get_i16_list_value(arr, idx))?,
-                DataType::Int32 => encoder.encode_field(&get_i32_list_value(arr, idx))?,
-                DataType::Int64 => encoder.encode_field(&get_i64_list_value(arr, idx))?,
-                DataType::UInt8 => encoder.encode_field(&get_u8_list_value(arr, idx))?,
-                DataType::UInt16 => encoder.encode_field(&get_u16_list_value(arr, idx))?,
-                DataType::UInt32 => encoder.encode_field(&get_u32_list_value(arr, idx))?,
-                DataType::UInt64 => encoder.encode_field(&get_u64_list_value(arr, idx))?,
-                DataType::Float32 => encoder.encode_field(&get_f32_list_value(arr, idx))?,
-                DataType::Float64 => encoder.encode_field(&get_f64_list_value(arr, idx))?,
-                DataType::Decimal128(_, s) => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<Decimal128Array>()
-                        .unwrap()
-                        .iter()
-                        .map(|ov| ov.map(|v| Decimal::from_i128_with_scale(v, *s as u32)))
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-                DataType::Utf8 => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .unwrap()
-                        .iter()
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-                DataType::Binary => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<BinaryArray>()
-                        .unwrap()
-                        .iter()
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-                DataType::LargeBinary => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<LargeBinaryArray>()
-                        .unwrap()
-                        .iter()
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-
-                DataType::Date32 => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<Date32Array>()
-                        .unwrap()
-                        .iter()
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-                DataType::Date64 => {
-                    let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                    let value: Vec<_> = list_arr
-                        .as_any()
-                        .downcast_ref::<Date64Array>()
-                        .unwrap()
-                        .iter()
-                        .collect();
-                    encoder.encode_field(&value)?
-                }
-                DataType::Time32(unit) => match unit {
-                    TimeUnit::Second => {
-                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let value: Vec<_> = list_arr
-                            .as_any()
-                            .downcast_ref::<Time32SecondArray>()
-                            .unwrap()
-                            .iter()
-                            .collect();
-                        encoder.encode_field(&value)?
-                    }
-                    TimeUnit::Millisecond => {
-                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let value: Vec<_> = list_arr
-                            .as_any()
-                            .downcast_ref::<Time32MillisecondArray>()
-                            .unwrap()
-                            .iter()
-                            .collect();
-                        encoder.encode_field(&value)?
-                    }
-                    _ => {}
-                },
-                DataType::Time64(unit) => match unit {
-                    TimeUnit::Microsecond => {
-                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let value: Vec<_> = list_arr
-                            .as_any()
-                            .downcast_ref::<Time64MicrosecondArray>()
-                            .unwrap()
-                            .iter()
-                            .collect();
-                        encoder.encode_field(&value)?
-                    }
-                    TimeUnit::Nanosecond => {
-                        let list_arr = arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let value: Vec<_> = list_arr
-                            .as_any()
-                            .downcast_ref::<Time64NanosecondArray>()
-                            .unwrap()
-                            .iter()
-                            .collect();
-                        encoder.encode_field(&value)?
-                    }
-                    _ => {}
-                },
-                DataType::Timestamp(unit, timezone) => match unit {
-                    TimeUnit::Second => {
-                        let list_array =
-                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let array_iter = list_array
-                            .as_any()
-                            .downcast_ref::<TimestampSecondArray>()
-                            .unwrap()
-                            .iter();
-
-                        if let Some(tz) = timezone {
-                            let tz = Tz::from_str(tz.as_ref())
-                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp(i, 0).map(|dt| {
-                                            Utc.from_utc_datetime(&dt.naive_utc())
-                                                .with_timezone(&tz)
-                                                .fixed_offset()
-                                        })
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?;
-                        } else {
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp(i, 0).map(|dt| dt.naive_utc())
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?
-                        }
-                    }
-                    TimeUnit::Millisecond => {
-                        let list_array =
-                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let array_iter = list_array
-                            .as_any()
-                            .downcast_ref::<TimestampMillisecondArray>()
-                            .unwrap()
-                            .iter();
-
-                        if let Some(tz) = timezone {
-                            let tz = Tz::from_str(tz.as_ref())
-                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp_millis(i).map(|dt| {
-                                            Utc.from_utc_datetime(&dt.naive_utc())
-                                                .with_timezone(&tz)
-                                                .fixed_offset()
-                                        })
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?;
-                        } else {
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp_millis(i).map(|dt| dt.naive_utc())
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?
-                        }
-                    }
-                    TimeUnit::Microsecond => {
-                        let list_array =
-                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let array_iter = list_array
-                            .as_any()
-                            .downcast_ref::<TimestampMicrosecondArray>()
-                            .unwrap()
-                            .iter();
-
-                        if let Some(tz) = timezone {
-                            let tz = Tz::from_str(tz.as_ref())
-                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp_micros(i).map(|dt| {
-                                            Utc.from_utc_datetime(&dt.naive_utc())
-                                                .with_timezone(&tz)
-                                                .fixed_offset()
-                                        })
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?;
-                        } else {
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.and_then(|i| {
-                                        DateTime::from_timestamp_micros(i).map(|dt| dt.naive_utc())
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?
-                        }
-                    }
-                    TimeUnit::Nanosecond => {
-                        let list_array =
-                            arr.as_any().downcast_ref::<ListArray>().unwrap().value(idx);
-                        let array_iter = list_array
-                            .as_any()
-                            .downcast_ref::<TimestampNanosecondArray>()
-                            .unwrap()
-                            .iter();
-
-                        if let Some(tz) = timezone {
-                            let tz = Tz::from_str(tz.as_ref())
-                                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-                            let value: Vec<_> = array_iter
-                                .map(|i| {
-                                    i.map(|i| {
-                                        Utc.from_utc_datetime(
-                                            &DateTime::from_timestamp_nanos(i).naive_utc(),
-                                        )
-                                        .with_timezone(&tz)
-                                        .fixed_offset()
-                                    })
-                                })
-                                .collect();
-                            encoder.encode_field(&value)?;
-                        } else {
-                            let value: Vec<_> = array_iter
-                                .map(|i| i.map(|i| DateTime::from_timestamp_nanos(i).naive_utc()))
-                                .collect();
-                            encoder.encode_field(&value)?
-                        }
-                    }
-                },
-
-                // TODO: more types
-                list_type => {
-                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!(
-                            "Unsupported List Datatype {} and array {:?}",
-                            list_type, &arr
-                        ),
-                    ))))
-                }
-            }
-        }
-        DataType::Dictionary(_, value_type) => {
-            // Get the dictionary values, ignoring keys
-            // We'll use Int32Type as a common key type, but we're only interested in values
-            macro_rules! get_dict_values {
-                ($key_type:ty) => {
-                    arr.as_any()
-                        .downcast_ref::<DictionaryArray<$key_type>>()
-                        .map(|dict| dict.values())
-                };
-            }
-
-            // Try to extract values using different key types
-            let values = get_dict_values!(Int8Type)
-                .or_else(|| get_dict_values!(Int16Type))
-                .or_else(|| get_dict_values!(Int32Type))
-                .or_else(|| get_dict_values!(Int64Type))
-                .or_else(|| get_dict_values!(UInt8Type))
-                .or_else(|| get_dict_values!(UInt16Type))
-                .or_else(|| get_dict_values!(UInt32Type))
-                .or_else(|| get_dict_values!(UInt64Type))
-                .ok_or_else(|| {
-                    PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!(
-                            "Unsupported dictionary key type for value type {}",
-                            value_type
-                        ),
-                    )))
-                })?;
-
-            // If the dictionary has only one value, treat it as a primitive
-            if values.len() == 1 {
-                encode_value(encoder, values, 0)?
-            } else {
-                // Otherwise, use value directly indexed by values array
-                encode_value(encoder, values, idx)?
-            }
-        }
-        _ => {
-            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                format!(
-                    "Unsupported Datatype {} and array {:?}",
-                    arr.data_type(),
-                    &arr
-                ),
-            ))))
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn df_schema_to_pg_fields(
@@ -734,34 +146,18 @@ pub(crate) async fn encode_dataframe<'a>(
     let fields_ref = fields.clone();
     let pg_row_stream = recordbatch_stream
         .map(move |rb: datafusion::error::Result<RecordBatch>| {
-            let row_stream: Box<dyn Iterator<Item = _> + Send> = match rb {
+            let row_stream: Box<dyn Iterator<Item = PgWireResult<DataRow>> + Send + Sync> = match rb
+            {
                 Ok(rb) => {
-                    let rows = rb.num_rows();
-                    let cols = rb.num_columns();
-
                     let fields = fields_ref.clone();
-
-                    let row_stream = (0..rows).map(move |row| {
-                        let mut encoder = DataRowEncoder::new(fields.clone());
-                        for col in 0..cols {
-                            let array = rb.column(col);
-                            if array.is_null(row) {
-                                encoder.encode_field(&None::<i8>)?;
-                            } else {
-                                encode_value(&mut encoder, array, row)?
-                            }
-                        }
-                        encoder.finish()
-                    });
-                    Box::new(row_stream)
+                    let mut row_stream = RowEncoder::new(rb, fields);
+                    Box::new(std::iter::from_fn(move || row_stream.next_row()))
                 }
                 Err(e) => Box::new(iter::once(Err(PgWireError::ApiError(e.into())))),
             };
-
             stream::iter(row_stream)
         })
         .flatten();
-
     Ok(QueryResponse::new(fields, pg_row_stream))
 }
 
