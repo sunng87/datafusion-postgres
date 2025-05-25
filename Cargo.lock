@@ -1355,11 +1355,13 @@ version = "0.3.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bytes",
  "chrono",
  "datafusion",
  "futures",
  "log",
  "pgwire",
+ "postgres-types",
  "rust_decimal",
  "tokio",
 ]
