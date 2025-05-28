@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use pgwire::api::auth::noop::NoopStartupHandler;
@@ -120,40 +120,48 @@ impl DfSessionService {
         let row_stream = futures::stream::once(async move { row });
         Ok(QueryResponse::new(Arc::new(fields), Box::pin(row_stream)))
     }
-}
 
-#[async_trait]
-impl SimpleQueryHandler for DfSessionService {
-    async fn do_query<'a, C>(
+    async fn try_respond_set_time_zone<'a>(
         &self,
-        _client: &mut C,
-        query: &'a str,
-    ) -> PgWireResult<Vec<Response<'a>>>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        let query_lower = query.to_lowercase().trim().to_string();
-        log::debug!("Received query: {}", query); // Log the query for debugging
-
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
         if query_lower.starts_with("set time zone") {
             let parts: Vec<&str> = query_lower.split_whitespace().collect();
             if parts.len() >= 4 {
                 let tz = parts[3].trim_matches('"');
                 let mut timezone = self.timezone.lock().await;
                 *timezone = tz.to_string();
-                return Ok(vec![Response::Execution(Tag::new("SET"))]);
+                Ok(Some(vec![Response::Execution(Tag::new("SET"))]))
+            } else {
+                Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "42601".to_string(),
+                        "Invalid SET TIME ZONE syntax".to_string(),
+                    ),
+                )))
             }
-            return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "42601".to_string(),
-                    "Invalid SET TIME ZONE syntax".to_string(),
-                ),
-            )));
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[async_trait]
+impl SimpleQueryHandler for DfSessionService {
+    async fn do_query<'a, C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response<'a>>>
+    where
+        C: ClientInfo + Unpin + Send + Sync,
+    {
+        let query_lower = query.to_lowercase().trim().to_string();
+        log::debug!("Received query: {}", query); // Log the query for debugging
+
+        if let Some(resp) = self.try_respond_set_time_zone(&query_lower).await? {
+            return Ok(resp);
         }
 
         if query_lower.starts_with("show ") {
-            match query_lower.as_str() {
+            match query_lower.as_ref() {
                 "show time zone" => {
                     let timezone = self.timezone.lock().await.clone();
                     let resp = Self::mock_show_response("TimeZone", &timezone)?;
@@ -309,7 +317,7 @@ impl ExtendedQueryHandler for DfSessionService {
     async fn do_query<'a, C>(
         &self,
         _client: &mut C,
-        portal: &'a Portal<Self::Statement>,
+        portal: &Portal<Self::Statement>,
         _max_rows: usize,
     ) -> PgWireResult<Response<'a>>
     where
@@ -415,7 +423,12 @@ pub struct Parser {
 impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
-    async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
+    async fn parse_sql<C>(
+        &self,
+        _client: &C,
+        sql: &str,
+        _types: &[Type],
+    ) -> PgWireResult<Self::Statement> {
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state
