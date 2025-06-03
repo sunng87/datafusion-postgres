@@ -2,7 +2,7 @@
   description = "Development environment flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,12 +18,14 @@
           psycopg
         ]);
         buildInputs = with pkgs; [
+          llvmPackages.libclang
         ];
       in
       {
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             pkg-config
+            clang
             git
             mold
             (fenix.packages.${system}.stable.withComponents [
@@ -42,6 +44,10 @@
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
+          shellHook = ''
+            export CC=clang
+            export CXX=clang++
+          '';
         };
       });
 }
