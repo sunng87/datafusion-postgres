@@ -1463,11 +1463,13 @@ name = "datafusion-postgres"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "datafusion",
  "futures",
  "log",
  "pgwire",
+ "postgres-types",
  "rust_decimal",
  "tokio",
 ]
