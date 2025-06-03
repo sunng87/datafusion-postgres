@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::*;
 use pgwire::api::auth::noop::NoopStartupHandler;
@@ -120,100 +120,128 @@ impl DfSessionService {
         let row_stream = futures::stream::once(async move { row });
         Ok(QueryResponse::new(Arc::new(fields), Box::pin(row_stream)))
     }
-}
 
-#[async_trait]
-impl SimpleQueryHandler for DfSessionService {
-    async fn do_query<'a, C>(
+    async fn try_respond_set_time_zone<'a>(
         &self,
-        _client: &mut C,
-        query: &'a str,
-    ) -> PgWireResult<Vec<Response<'a>>>
-    where
-        C: ClientInfo + Unpin + Send + Sync,
-    {
-        let query_lower = query.to_lowercase().trim().to_string();
-        log::debug!("Received query: {}", query); // Log the query for debugging
-
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
         if query_lower.starts_with("set time zone") {
             let parts: Vec<&str> = query_lower.split_whitespace().collect();
             if parts.len() >= 4 {
                 let tz = parts[3].trim_matches('"');
                 let mut timezone = self.timezone.lock().await;
                 *timezone = tz.to_string();
-                return Ok(vec![Response::Execution(Tag::new("SET"))]);
+                Ok(Some(vec![Response::Execution(Tag::new("SET"))]))
+            } else {
+                Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "42601".to_string(),
+                        "Invalid SET TIME ZONE syntax".to_string(),
+                    ),
+                )))
             }
-            return Err(PgWireError::UserError(Box::new(
-                pgwire::error::ErrorInfo::new(
-                    "ERROR".to_string(),
-                    "42601".to_string(),
-                    "Invalid SET TIME ZONE syntax".to_string(),
-                ),
-            )));
+        } else {
+            Ok(None)
         }
+    }
 
+    async fn try_respond_show_statements<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
         if query_lower.starts_with("show ") {
-            match query_lower.as_str() {
+            match query_lower {
                 "show time zone" => {
                     let timezone = self.timezone.lock().await.clone();
                     let resp = Self::mock_show_response("TimeZone", &timezone)?;
-                    return Ok(vec![Response::Query(resp)]);
+                    Ok(Some(vec![Response::Query(resp)]))
                 }
                 "show server_version" => {
                     let resp = Self::mock_show_response("server_version", "15.0 (DataFusion)")?;
-                    return Ok(vec![Response::Query(resp)]);
+                    Ok(Some(vec![Response::Query(resp)]))
                 }
                 "show transaction_isolation" => {
                     let resp =
                         Self::mock_show_response("transaction_isolation", "read uncommitted")?;
-                    return Ok(vec![Response::Query(resp)]);
+                    Ok(Some(vec![Response::Query(resp)]))
                 }
                 "show catalogs" => {
                     let catalogs = self.session_context.catalog_names();
                     let value = catalogs.join(", ");
                     let resp = Self::mock_show_response("Catalogs", &value)?;
-                    return Ok(vec![Response::Query(resp)]);
+                    Ok(Some(vec![Response::Query(resp)]))
                 }
                 "show search_path" => {
                     let resp = Self::mock_show_response("search_path", &self.catalog_name)?;
-                    return Ok(vec![Response::Query(resp)]);
+                    Ok(Some(vec![Response::Query(resp)]))
                 }
-                _ => {
-                    return Err(PgWireError::UserError(Box::new(
-                        pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "42704".to_string(),
-                            format!("Unrecognized SHOW command: {}", query),
-                        ),
-                    )));
-                }
+                _ => Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "42704".to_string(),
+                        format!("Unrecognized SHOW command: {}", query_lower),
+                    ),
+                ))),
             }
+        } else {
+            Ok(None)
         }
+    }
 
+    async fn try_respond_information_schema<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
         if query_lower.contains("information_schema.schemata") {
             let df = schemata_df(&self.session_context)
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
+            return Ok(Some(vec![Response::Query(resp)]));
         } else if query_lower.contains("information_schema.tables") {
             let df = tables_df(&self.session_context)
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
+            return Ok(Some(vec![Response::Query(resp)]));
         } else if query_lower.contains("information_schema.columns") {
             let df = columns_df(&self.session_context)
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
             let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
+            return Ok(Some(vec![Response::Query(resp)]));
         }
 
         // Handle pg_catalog.pg_namespace for pgcli compatibility
         if query_lower.contains("pg_catalog.pg_namespace") {
             let resp = self.mock_pg_namespace().await?;
-            return Ok(vec![Response::Query(resp)]);
+            return Ok(Some(vec![Response::Query(resp)]));
+        }
+
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl SimpleQueryHandler for DfSessionService {
+    async fn do_query<'a, C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response<'a>>>
+    where
+        C: ClientInfo + Unpin + Send + Sync,
+    {
+        let query_lower = query.to_lowercase().trim().to_string();
+        log::debug!("Received query: {}", query); // Log the query for debugging
+
+        if let Some(resp) = self.try_respond_set_time_zone(&query_lower).await? {
+            return Ok(resp);
+        }
+
+        if let Some(resp) = self.try_respond_show_statements(&query_lower).await? {
+            return Ok(resp);
+        }
+
+        if let Some(resp) = self.try_respond_information_schema(&query_lower).await? {
+            return Ok(resp);
         }
 
         let df = self
@@ -309,7 +337,7 @@ impl ExtendedQueryHandler for DfSessionService {
     async fn do_query<'a, C>(
         &self,
         _client: &mut C,
-        portal: &'a Portal<Self::Statement>,
+        portal: &Portal<Self::Statement>,
         _max_rows: usize,
     ) -> PgWireResult<Response<'a>>
     where
@@ -415,7 +443,12 @@ pub struct Parser {
 impl QueryParser for Parser {
     type Statement = LogicalPlan;
 
-    async fn parse_sql(&self, sql: &str, _types: &[Type]) -> PgWireResult<Self::Statement> {
+    async fn parse_sql<C>(
+        &self,
+        _client: &C,
+        sql: &str,
+        _types: &[Type],
+    ) -> PgWireResult<Self::Statement> {
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state

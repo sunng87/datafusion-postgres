@@ -1,25 +1,20 @@
 use std::{error::Error, str::FromStr, sync::Arc};
 
-use arrow::{
-    datatypes::{
-        Date32Type, Date64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType,
-    },
-    temporal_conversions::{as_date, as_time},
-};
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
+use datafusion::arrow::array::{
+    timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
+    LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+};
 use datafusion::arrow::{
-    array::{
-        timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
-        Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-    },
     datatypes::{
-        DataType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimeUnit,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
+        Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+        Time64NanosecondType, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
+    temporal_conversions::{as_date, as_time},
 };
 use pgwire::{
     api::results::FieldFormat,

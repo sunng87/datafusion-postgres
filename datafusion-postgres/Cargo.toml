@@ -16,7 +16,6 @@ readme = "../README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = "54.2.0"
 async-trait = "0.1"
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["std"] }
