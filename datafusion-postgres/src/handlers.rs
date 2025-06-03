@@ -145,6 +145,82 @@ impl DfSessionService {
             Ok(None)
         }
     }
+
+    async fn try_respond_show_statements<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
+        if query_lower.starts_with("show ") {
+            match query_lower {
+                "show time zone" => {
+                    let timezone = self.timezone.lock().await.clone();
+                    let resp = Self::mock_show_response("TimeZone", &timezone)?;
+                    Ok(Some(vec![Response::Query(resp)]))
+                }
+                "show server_version" => {
+                    let resp = Self::mock_show_response("server_version", "15.0 (DataFusion)")?;
+                    Ok(Some(vec![Response::Query(resp)]))
+                }
+                "show transaction_isolation" => {
+                    let resp =
+                        Self::mock_show_response("transaction_isolation", "read uncommitted")?;
+                    Ok(Some(vec![Response::Query(resp)]))
+                }
+                "show catalogs" => {
+                    let catalogs = self.session_context.catalog_names();
+                    let value = catalogs.join(", ");
+                    let resp = Self::mock_show_response("Catalogs", &value)?;
+                    Ok(Some(vec![Response::Query(resp)]))
+                }
+                "show search_path" => {
+                    let resp = Self::mock_show_response("search_path", &self.catalog_name)?;
+                    Ok(Some(vec![Response::Query(resp)]))
+                }
+                _ => Err(PgWireError::UserError(Box::new(
+                    pgwire::error::ErrorInfo::new(
+                        "ERROR".to_string(),
+                        "42704".to_string(),
+                        format!("Unrecognized SHOW command: {}", query_lower),
+                    ),
+                ))),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn try_respond_information_schema<'a>(
+        &self,
+        query_lower: &str,
+    ) -> PgWireResult<Option<Vec<Response<'a>>>> {
+        if query_lower.contains("information_schema.schemata") {
+            let df = schemata_df(&self.session_context)
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(Some(vec![Response::Query(resp)]));
+        } else if query_lower.contains("information_schema.tables") {
+            let df = tables_df(&self.session_context)
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(Some(vec![Response::Query(resp)]));
+        } else if query_lower.contains("information_schema.columns") {
+            let df = columns_df(&self.session_context)
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
+            return Ok(Some(vec![Response::Query(resp)]));
+        }
+
+        // Handle pg_catalog.pg_namespace for pgcli compatibility
+        if query_lower.contains("pg_catalog.pg_namespace") {
+            let resp = self.mock_pg_namespace().await?;
+            return Ok(Some(vec![Response::Query(resp)]));
+        }
+
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -160,68 +236,12 @@ impl SimpleQueryHandler for DfSessionService {
             return Ok(resp);
         }
 
-        if query_lower.starts_with("show ") {
-            match query_lower.as_ref() {
-                "show time zone" => {
-                    let timezone = self.timezone.lock().await.clone();
-                    let resp = Self::mock_show_response("TimeZone", &timezone)?;
-                    return Ok(vec![Response::Query(resp)]);
-                }
-                "show server_version" => {
-                    let resp = Self::mock_show_response("server_version", "15.0 (DataFusion)")?;
-                    return Ok(vec![Response::Query(resp)]);
-                }
-                "show transaction_isolation" => {
-                    let resp =
-                        Self::mock_show_response("transaction_isolation", "read uncommitted")?;
-                    return Ok(vec![Response::Query(resp)]);
-                }
-                "show catalogs" => {
-                    let catalogs = self.session_context.catalog_names();
-                    let value = catalogs.join(", ");
-                    let resp = Self::mock_show_response("Catalogs", &value)?;
-                    return Ok(vec![Response::Query(resp)]);
-                }
-                "show search_path" => {
-                    let resp = Self::mock_show_response("search_path", &self.catalog_name)?;
-                    return Ok(vec![Response::Query(resp)]);
-                }
-                _ => {
-                    return Err(PgWireError::UserError(Box::new(
-                        pgwire::error::ErrorInfo::new(
-                            "ERROR".to_string(),
-                            "42704".to_string(),
-                            format!("Unrecognized SHOW command: {}", query),
-                        ),
-                    )));
-                }
-            }
+        if let Some(resp) = self.try_respond_show_statements(&query_lower).await? {
+            return Ok(resp);
         }
 
-        if query_lower.contains("information_schema.schemata") {
-            let df = schemata_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
-        } else if query_lower.contains("information_schema.tables") {
-            let df = tables_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
-        } else if query_lower.contains("information_schema.columns") {
-            let df = columns_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(vec![Response::Query(resp)]);
-        }
-
-        // Handle pg_catalog.pg_namespace for pgcli compatibility
-        if query_lower.contains("pg_catalog.pg_namespace") {
-            let resp = self.mock_pg_namespace().await?;
-            return Ok(vec![Response::Query(resp)]);
+        if let Some(resp) = self.try_respond_information_schema(&query_lower).await? {
+            return Ok(resp);
         }
 
         let df = self
