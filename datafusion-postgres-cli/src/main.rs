@@ -99,10 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
-    let server_options = ServerOptions {
-        host: opts.host.clone(),
-        port: opts.port,
-    };
+    let server_options = ServerOptions::new()
+        .with_host(opts.host)
+        .with_port(opts.port);
 
     serve(session_context, &server_options)
         .await

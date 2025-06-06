@@ -8,12 +8,21 @@ pub use handlers::{DfSessionService, HandlerFactory, Parser};
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
+use getset::{Getters, Setters, WithSetters};
 use pgwire::tokio::process_socket;
 use tokio::net::TcpListener;
 
+#[derive(Getters, Setters, WithSetters)]
+#[getset(get = "pub", set = "pub", set_with = "pub")]
 pub struct ServerOptions {
-    pub host: String,
-    pub port: u16,
+    host: String,
+    port: u16,
+}
+
+impl ServerOptions {
+    pub fn new() -> ServerOptions {
+        ServerOptions::default()
+    }
 }
 
 impl Default for ServerOptions {
