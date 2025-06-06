@@ -39,16 +39,9 @@ pub async fn serve(
     session_context: SessionContext,
     opts: &ServerOptions,
 ) -> Result<(), std::io::Error> {
-    // Get the first catalog name from the session context
-    let catalog_name = session_context
-        .catalog_names() // Fixed: Removed .catalog_list()
-        .first()
-        .cloned();
-
     // Create the handler factory with the session context and catalog name
     let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
         session_context,
-        catalog_name,
     ))));
 
     // Bind to the specified host and port
@@ -58,15 +51,20 @@ pub async fn serve(
 
     // Accept incoming connections
     loop {
-        if let Ok((socket, addr)) = listener.accept().await {
-            let factory_ref = factory.clone();
-            println!("Accepted connection from {}", addr);
+        match listener.accept().await {
+            Ok((socket, addr)) => {
+                let factory_ref = factory.clone();
+                println!("Accepted connection from {}", addr);
 
-            tokio::spawn(async move {
-                if let Err(e) = process_socket(socket, None, factory_ref).await {
-                    eprintln!("Error processing socket: {}", e);
-                }
-            });
-        };
+                tokio::spawn(async move {
+                    if let Err(e) = process_socket(socket, None, factory_ref).await {
+                        eprintln!("Error processing socket: {}", e);
+                    }
+                });
+            }
+            Err(e) => {
+                eprintln!("Error accept socket: {}", e);
+            }
+        }
     }
 }
