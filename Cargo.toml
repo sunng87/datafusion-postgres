@@ -2,6 +2,18 @@
 resolver = "2"
 members = ["datafusion-postgres", "datafusion-postgres-cli"]
 
+[workspace.package]
+version = "0.4.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.82.0"
+authors = ["Ning Sun <n@sunng.info>"]
+keywords = ["database", "postgresql", "datafusion"]
+homepage = "https://github.com/sunng87/datafusion-postgres/"
+repository = "https://github.com/sunng87/datafusion-postgres/"
+documentation = "https://docs.rs/crate/datafusion-postgres/"
+readme = "README.md"
+
 [workspace.dependencies]
 pgwire = "0.30.2"
 datafusion = { version = "47", default-features = false }
