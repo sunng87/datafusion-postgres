@@ -47,61 +47,67 @@ fn parse_table_def(table_def: &str) -> (&str, &str) {
 }
 
 impl Opt {
-    fn include_directory_files(&mut self) {
+    fn include_directory_files(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(directory) = &self.directory {
-            if let Ok(entries) = fs::read_dir(directory) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if !path.is_file() {
-                        continue;
-                    }
+            match fs::read_dir(directory) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
 
-                    if let Some(ext) = path.extension().and_then(OsStr::to_str) {
-                        let ext_lower = ext.to_lowercase();
-                        if let Some(base_name) = path.file_stem().and_then(|s| s.to_str()) {
-                            match ext_lower.as_ref() {
-                                "json" => {
-                                    self.json_tables.push(format!(
-                                        "{}:{}",
-                                        base_name,
-                                        path.to_string_lossy()
-                                    ));
+                        if let Some(ext) = path.extension().and_then(OsStr::to_str) {
+                            let ext_lower = ext.to_lowercase();
+                            if let Some(base_name) = path.file_stem().and_then(|s| s.to_str()) {
+                                match ext_lower.as_ref() {
+                                    "json" => {
+                                        self.json_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "avro" => {
+                                        self.avro_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "parquet" => {
+                                        self.parquet_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "csv" => {
+                                        self.csv_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "arrow" => {
+                                        self.arrow_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    _ => {}
                                 }
-                                "avro" => {
-                                    self.avro_tables.push(format!(
-                                        "{}:{}",
-                                        base_name,
-                                        path.to_string_lossy()
-                                    ));
-                                }
-                                "parquet" => {
-                                    self.parquet_tables.push(format!(
-                                        "{}:{}",
-                                        base_name,
-                                        path.to_string_lossy()
-                                    ));
-                                }
-                                "csv" => {
-                                    self.csv_tables.push(format!(
-                                        "{}:{}",
-                                        base_name,
-                                        path.to_string_lossy()
-                                    ));
-                                }
-                                "arrow" => {
-                                    self.arrow_tables.push(format!(
-                                        "{}:{}",
-                                        base_name,
-                                        path.to_string_lossy()
-                                    ));
-                                }
-                                _ => {}
                             }
                         }
                     }
                 }
+                Err(e) => {
+                    return Err(format!("Failed to load directory {}: {}", directory, e).into());
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -168,7 +174,7 @@ async fn setup_session_context(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut opts = Opt::from_args();
-    opts.include_directory_files();
+    opts.include_directory_files()?;
 
     let session_context = SessionContext::new();
 
