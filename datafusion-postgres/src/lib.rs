@@ -3,14 +3,15 @@ mod encoder;
 mod handlers;
 mod information_schema;
 
-pub use handlers::{DfSessionService, HandlerFactory, Parser};
-
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use getset::{Getters, Setters, WithSetters};
 use pgwire::tokio::process_socket;
 use tokio::net::TcpListener;
+
+use handlers::HandlerFactory;
+pub use handlers::{DfSessionService, Parser};
 
 #[derive(Getters, Setters, WithSetters)]
 #[getset(get = "pub", set = "pub", set_with = "pub")]
