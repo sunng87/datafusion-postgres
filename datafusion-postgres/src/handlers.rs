@@ -147,7 +147,7 @@ impl DfSessionService {
         query_lower: &str,
     ) -> PgWireResult<Option<Response<'a>>> {
         if query_lower.starts_with("show ") {
-            match query_lower {
+            match query_lower.strip_suffix(";").unwrap_or(query_lower) {
                 "show time zone" => {
                     let timezone = self.timezone.lock().await.clone();
                     let resp = Self::mock_show_response("TimeZone", &timezone)?;
