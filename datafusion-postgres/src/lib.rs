@@ -37,7 +37,7 @@ impl Default for ServerOptions {
 
 /// Serve the Datafusion `SessionContext` with Postgres protocol.
 pub async fn serve(
-    session_context: SessionContext,
+    session_context: Arc<SessionContext>,
     opts: &ServerOptions,
 ) -> Result<(), std::io::Error> {
     // Create the handler factory with the session context and catalog name

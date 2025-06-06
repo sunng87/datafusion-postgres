@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
+use std::sync::Arc;
 
 use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
@@ -184,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_host(opts.host)
         .with_port(opts.port);
 
-    serve(session_context, &server_options)
+    serve(Arc::new(session_context), &server_options)
         .await
         .map_err(|e| format!("Failed to run server: {}", e))?;
 
