@@ -1,13 +1,9 @@
-use std::sync::Arc;
-
 use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::SessionContext;
-use datafusion_postgres::{DfSessionService, HandlerFactory}; // Assuming the crate name is `datafusion_postgres`
-use pgwire::tokio::process_socket;
+use datafusion_postgres::{serve, ServerOptions}; // Assuming the crate name is `datafusion_postgres`
 use structopt::StructOpt;
-use tokio::net::TcpListener;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -103,33 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Loaded {} as table {}", table_path, table_name);
     }
 
-    // Get the first catalog name from the session context
-    let catalog_name = session_context
-        .catalog_names() // Fixed: Removed .catalog_list()
-        .first()
-        .cloned();
+    let server_options = ServerOptions::new()
+        .with_host(opts.host)
+        .with_port(opts.port);
 
-    // Create the handler factory with the session context and catalog name
-    let factory = Arc::new(HandlerFactory(Arc::new(DfSessionService::new(
-        session_context,
-        catalog_name,
-    ))));
+    serve(session_context, &server_options)
+        .await
+        .map_err(|e| format!("Failed to run server: {}", e))?;
 
-    // Bind to the specified host and port
-    let server_addr = format!("{}:{}", opts.host, opts.port);
-    let listener = TcpListener::bind(&server_addr).await?;
-    println!("Listening on {}", server_addr);
-
-    // Accept incoming connections
-    loop {
-        let (socket, addr) = listener.accept().await?;
-        let factory_ref = factory.clone();
-        println!("Accepted connection from {}", addr);
-
-        tokio::spawn(async move {
-            if let Err(e) = process_socket(socket, None, factory_ref).await {
-                eprintln!("Error processing socket: {}", e);
-            }
-        });
-    }
+    Ok(())
 }
