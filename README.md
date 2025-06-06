@@ -37,7 +37,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_postgres::{serve, ServerOptions};
 
 // Create datafusion SessionContext
-let session_context = SessionContext::new();
+let session_context = Arc::new(SessionContext::new());
 // Configure your `session_context`
 // ...
 
