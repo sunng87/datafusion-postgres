@@ -19,12 +19,33 @@ picking up unfinished items.
 
 - [x] datafusion-postgres as a CLI tool
 - [x] datafusion-postgres as a library
-- [x] datafusion information schema: a postgres compatible `information_schema`
+- [ ] datafusion information schema: a postgres compatible `information_schema`
 - [ ] datafusion pg catalog: a postgres compatible `pg_catalog`
 - [ ] data type mapping between arrow and postgres: in progress
 - [ ] additional postgres functions for datafusion
 
 ## Usage
+
+### The Library `datafusion-postgres`
+
+The high-level entrypoint of `datafusion-postgres` library is the `serve`
+function which takes a datafusion `SessionContext` and some server configuration
+options.
+
+```rust
+use datafusion::prelude::SessionContext;
+use datafusion_postgres::{serve, ServerOptions};
+
+// Create datafusion SessionContext
+let session_context = SessionContext::new();
+// Configure your `session_context`
+// ...
+
+// Start the Postgres compatible server
+serve(session_context, &ServerOptions::new()).await
+```
+
+### The CLI `datafusion-postgres-cli`
 
 As a command-line application, this tool serves any JSON/CSV/Arrow/Parquet/Avro
 files as table, and expose them via Postgres compatible protocol, with which you

@@ -37,6 +37,7 @@
               "rust-analyzer"
             ])
             cargo-nextest
+            cargo-release
             curl
             gnuplot ## for cargo bench
             pythonEnv
