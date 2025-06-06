@@ -1,3 +1,6 @@
+use std::ffi::OsStr;
+use std::fs;
+
 use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
@@ -26,6 +29,9 @@ struct Opt {
     /// Avro files to register as table, using syntax `table_name:file_path`
     #[structopt(long("avro"))]
     avro_tables: Vec<String>,
+    /// Directory to serve, all supported files will be registered as tables
+    #[structopt(long("dir"), short("d"))]
+    directory: Option<String>,
     /// Port the server listens to, default to 5432
     #[structopt(short, default_value = "5432")]
     port: u16,
@@ -40,12 +46,75 @@ fn parse_table_def(table_def: &str) -> (&str, &str) {
         .expect("Use this pattern to register table: table_name:file_path")
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let opts = Opt::from_args();
+impl Opt {
+    fn include_directory_files(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(directory) = &self.directory {
+            match fs::read_dir(directory) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
 
-    let session_context = SessionContext::new();
+                        if let Some(ext) = path.extension().and_then(OsStr::to_str) {
+                            let ext_lower = ext.to_lowercase();
+                            if let Some(base_name) = path.file_stem().and_then(|s| s.to_str()) {
+                                match ext_lower.as_ref() {
+                                    "json" => {
+                                        self.json_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "avro" => {
+                                        self.avro_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "parquet" => {
+                                        self.parquet_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "csv" => {
+                                        self.csv_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    "arrow" => {
+                                        self.arrow_tables.push(format!(
+                                            "{}:{}",
+                                            base_name,
+                                            path.to_string_lossy()
+                                        ));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Failed to load directory {}: {}", directory, e).into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
+async fn setup_session_context(
+    session_context: &SessionContext,
+    opts: &Opt,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Register CSV tables
     for (table_name, table_path) in opts.csv_tables.iter().map(|s| parse_table_def(s.as_ref())) {
         session_context
@@ -98,6 +167,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Failed to register Avro table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut opts = Opt::from_args();
+    opts.include_directory_files()?;
+
+    let session_context = SessionContext::new();
+
+    setup_session_context(&session_context, &opts).await?;
 
     let server_options = ServerOptions::new()
         .with_host(opts.host)

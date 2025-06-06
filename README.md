@@ -53,11 +53,11 @@ can connect using psql or language drivers to execute `SELECT` queries against
 them.
 
 ```
-datafusion-postgres 0.1.0
-A postgres interface for datatfusion. Serve any CSV/JSON/Arrow files as tables.
+datafusion-postgres 0.4.0
+A postgres interface for datafusion. Serve any CSV/JSON/Arrow files as tables.
 
 USAGE:
-    datafusion-postgres [OPTIONS]
+    datafusion-postgres-cli [OPTIONS]
 
 FLAGS:
     -h, --help       Prints help information
@@ -67,8 +67,11 @@ OPTIONS:
         --arrow <arrow-tables>...        Arrow files to register as table, using syntax `table_name:file_path`
         --avro <avro-tables>...          Avro files to register as table, using syntax `table_name:file_path`
         --csv <csv-tables>...            CSV files to register as table, using syntax `table_name:file_path`
+    -d, --dir <directory>                Directory to serve, all supported files will be registered as tables
+        --host <host>                    Host address the server listens to, default to 127.0.0.1 [default: 127.0.0.1]
         --json <json-tables>...          JSON files to register as table, using syntax `table_name:file_path`
         --parquet <parquet-tables>...    Parquet files to register as table, using syntax `table_name:file_path`
+    -p <port>                            Port the server listens to, default to 5432 [default: 5432]
 ```
 
 For example, we use this command to host `ETTm1.csv` dataset as table `ettm1`.
