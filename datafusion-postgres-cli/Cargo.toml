@@ -9,7 +9,7 @@ keywords.workspace = true
 homepage.workspace = true
 repository.workspace = true
 documentation.workspace = true
-readme.workspace = true
+readme = "../README.md"
 
 [dependencies]
 pgwire = { workspace = true }

@@ -12,7 +12,6 @@ keywords = ["database", "postgresql", "datafusion"]
 homepage = "https://github.com/sunng87/datafusion-postgres/"
 repository = "https://github.com/sunng87/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
-readme = "README.md"
 
 [workspace.dependencies]
 pgwire = "0.30.2"
