@@ -61,8 +61,7 @@ pub struct DfSessionService {
 }
 
 impl DfSessionService {
-    pub fn new(session_context: SessionContext) -> DfSessionService {
-        let session_context = Arc::new(session_context);
+    pub fn new(session_context: Arc<SessionContext>) -> DfSessionService {
         let parser = Arc::new(Parser {
             session_context: session_context.clone(),
         });
