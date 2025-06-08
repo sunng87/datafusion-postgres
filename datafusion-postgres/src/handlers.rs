@@ -19,7 +19,6 @@ use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
 use tokio::sync::Mutex;
 
 use crate::datatypes;
-use crate::information_schema::{columns_df, schemata_df, tables_df};
 use pgwire::error::{PgWireError, PgWireResult};
 
 pub struct HandlerFactory(pub Arc<DfSessionService>);
@@ -189,39 +188,6 @@ impl DfSessionService {
             Ok(None)
         }
     }
-
-    async fn try_respond_information_schema<'a>(
-        &self,
-        query_lower: &str,
-    ) -> PgWireResult<Option<Response<'a>>> {
-        if query_lower.contains("information_schema.schemata") {
-            let df = schemata_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(Some(Response::Query(resp)));
-        } else if query_lower.contains("information_schema.tables") {
-            let df = tables_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(Some(Response::Query(resp)));
-        } else if query_lower.contains("information_schema.columns") {
-            let df = columns_df(&self.session_context)
-                .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-            let resp = datatypes::encode_dataframe(df, &Format::UnifiedText).await?;
-            return Ok(Some(Response::Query(resp)));
-        }
-
-        // Handle pg_catalog.pg_namespace for pgcli compatibility
-        if query_lower.contains("pg_catalog.pg_namespace") {
-            let resp = self.mock_pg_namespace().await?;
-            return Ok(Some(Response::Query(resp)));
-        }
-
-        Ok(None)
-    }
 }
 
 #[async_trait]
@@ -238,10 +204,6 @@ impl SimpleQueryHandler for DfSessionService {
         }
 
         if let Some(resp) = self.try_respond_show_statements(&query_lower).await? {
-            return Ok(vec![resp]);
-        }
-
-        if let Some(resp) = self.try_respond_information_schema(&query_lower).await? {
             return Ok(vec![resp]);
         }
 
@@ -361,11 +323,8 @@ impl ExtendedQueryHandler for DfSessionService {
             return Ok(resp);
         }
 
-        if let Some(resp) = self.try_respond_information_schema(&query).await? {
-            return Ok(resp);
-        }
-
         let (_, plan) = &portal.statement.statement;
+
         let param_types = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
