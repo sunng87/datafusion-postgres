@@ -174,6 +174,8 @@ async fn setup_session_context(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
     let mut opts = Opt::from_args();
     opts.include_directory_files()?;
 
