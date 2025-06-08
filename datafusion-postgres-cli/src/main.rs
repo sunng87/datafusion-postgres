@@ -6,6 +6,7 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_postgres::pg_catalog::PgCatalogSchemaProvider;
 use datafusion_postgres::{serve, ServerOptions}; // Assuming the crate name is `datafusion_postgres`
 use structopt::StructOpt;
 
@@ -168,6 +169,13 @@ async fn setup_session_context(
             .map_err(|e| format!("Failed to register Avro table '{}': {}", table_name, e))?;
         println!("Loaded {} as table {}", table_path, table_name);
     }
+
+    // Register pg_catalog
+    let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
+    session_context
+        .catalog("datafusion")
+        .unwrap()
+        .register_schema("pg_catalog", Arc::new(pg_catalog))?;
 
     Ok(())
 }

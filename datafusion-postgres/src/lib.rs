@@ -1,6 +1,7 @@
 mod datatypes;
 mod encoder;
 mod handlers;
+pub mod pg_catalog;
 
 use std::sync::Arc;
 
