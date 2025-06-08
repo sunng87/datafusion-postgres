@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_postgres::{serve, ServerOptions}; // Assuming the crate name is `datafusion_postgres`
 use structopt::StructOpt;
 
@@ -179,7 +179,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut opts = Opt::from_args();
     opts.include_directory_files()?;
 
-    let session_context = SessionContext::new();
+    let session_config = SessionConfig::new().with_information_schema(true);
+    let session_context = SessionContext::new_with_config(session_config);
 
     setup_session_context(&session_context, &opts).await?;
 
