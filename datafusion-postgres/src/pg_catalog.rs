@@ -63,6 +63,12 @@ impl SchemaProvider for PgCatalogSchemaProvider {
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
             }
+            PG_CATALOG_TABLE_PG_DATABASE => {
+                let table = Arc::new(PgDatabaseTable::new(self.catalog_list.clone()));
+                Ok(Some(Arc::new(
+                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
+                )))
+            }
             _ => Ok(None),
         }
     }
@@ -438,6 +444,144 @@ impl PgNamespaceTable {
 }
 
 impl PartitionStream for PgNamespaceTable {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let catalog_list = self.catalog_list.clone();
+        let schema = Arc::clone(&self.schema);
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema.clone(),
+            futures::stream::once(async move { Self::get_data(schema, catalog_list).await }),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct PgDatabaseTable {
+    schema: SchemaRef,
+    catalog_list: Arc<dyn CatalogProviderList>,
+}
+
+impl PgDatabaseTable {
+    pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
+        // Define the schema for pg_database
+        // This matches PostgreSQL's pg_database table columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("oid", DataType::Int32, false), // Object identifier
+            Field::new("datname", DataType::Utf8, false), // Database name
+            Field::new("datdba", DataType::Int32, false), // Database owner's user ID
+            Field::new("encoding", DataType::Int32, false), // Character encoding
+            Field::new("datcollate", DataType::Utf8, false), // LC_COLLATE for this database
+            Field::new("datctype", DataType::Utf8, false), // LC_CTYPE for this database
+            Field::new("datistemplate", DataType::Boolean, false), // If true, database can be used as a template
+            Field::new("datallowconn", DataType::Boolean, false), // If false, no one can connect to this database
+            Field::new("datconnlimit", DataType::Int32, false), // Max number of concurrent connections (-1=no limit)
+            Field::new("datlastsysoid", DataType::Int32, false), // Last system OID in database
+            Field::new("datfrozenxid", DataType::Int32, false), // Frozen XID for this database
+            Field::new("datminmxid", DataType::Int32, false),   // Minimum multixact ID
+            Field::new("dattablespace", DataType::Int32, false), // Default tablespace for this database
+            Field::new("datacl", DataType::Utf8, true),          // Access privileges
+        ]));
+
+        Self {
+            schema,
+            catalog_list,
+        }
+    }
+
+    /// Generate record batches based on the current state of the catalog
+    async fn get_data(
+        schema: SchemaRef,
+        catalog_list: Arc<dyn CatalogProviderList>,
+    ) -> Result<RecordBatch> {
+        // Vectors to store column data
+        let mut oids = Vec::new();
+        let mut datnames = Vec::new();
+        let mut datdbas = Vec::new();
+        let mut encodings = Vec::new();
+        let mut datcollates = Vec::new();
+        let mut datctypes = Vec::new();
+        let mut datistemplates = Vec::new();
+        let mut datallowconns = Vec::new();
+        let mut datconnlimits = Vec::new();
+        let mut datlastsysoids = Vec::new();
+        let mut datfrozenxids = Vec::new();
+        let mut datminmxids = Vec::new();
+        let mut dattablespaces = Vec::new();
+        let mut datacles: Vec<Option<String>> = Vec::new();
+
+        // Start OID counter (this is simplistic and would need to be more robust in practice)
+        let mut next_oid = 16384; // Standard PostgreSQL starting OID for user databases
+
+        // Add a record for each catalog (treating catalogs as "databases")
+        for catalog_name in catalog_list.catalog_names() {
+            let oid = next_oid;
+            next_oid += 1;
+
+            oids.push(oid);
+            datnames.push(catalog_name.clone());
+            datdbas.push(10); // Default owner (assuming 10 = postgres user)
+            encodings.push(6); // 6 = UTF8 in PostgreSQL
+            datcollates.push("en_US.UTF-8".to_string()); // Default collation
+            datctypes.push("en_US.UTF-8".to_string()); // Default ctype
+            datistemplates.push(false);
+            datallowconns.push(true);
+            datconnlimits.push(-1); // No connection limit
+            datlastsysoids.push(100000); // Arbitrary last system OID
+            datfrozenxids.push(1); // Simplified transaction ID
+            datminmxids.push(1); // Simplified multixact ID
+            dattablespaces.push(1663); // Default tablespace (1663 = pg_default in PostgreSQL)
+            datacles.push(None); // No specific ACLs
+        }
+
+        // Always include a "postgres" database entry if not already present
+        // (This is for compatibility with tools that expect it)
+        if !datnames.contains(&"postgres".to_string()) {
+            let oid = next_oid;
+
+            oids.push(oid);
+            datnames.push("postgres".to_string());
+            datdbas.push(10);
+            encodings.push(6);
+            datcollates.push("en_US.UTF-8".to_string());
+            datctypes.push("en_US.UTF-8".to_string());
+            datistemplates.push(false);
+            datallowconns.push(true);
+            datconnlimits.push(-1);
+            datlastsysoids.push(100000);
+            datfrozenxids.push(1);
+            datminmxids.push(1);
+            dattablespaces.push(1663);
+            datacles.push(None);
+        }
+
+        // Create Arrow arrays from the collected data
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(oids)),
+            Arc::new(StringArray::from(datnames)),
+            Arc::new(Int32Array::from(datdbas)),
+            Arc::new(Int32Array::from(encodings)),
+            Arc::new(StringArray::from(datcollates)),
+            Arc::new(StringArray::from(datctypes)),
+            Arc::new(BooleanArray::from(datistemplates)),
+            Arc::new(BooleanArray::from(datallowconns)),
+            Arc::new(Int32Array::from(datconnlimits)),
+            Arc::new(Int32Array::from(datlastsysoids)),
+            Arc::new(Int32Array::from(datfrozenxids)),
+            Arc::new(Int32Array::from(datminmxids)),
+            Arc::new(Int32Array::from(dattablespaces)),
+            Arc::new(StringArray::from_iter(datacles.into_iter())),
+        ];
+
+        // Create a full record batch
+        let full_batch = RecordBatch::try_new(schema.clone(), arrays)?;
+        Ok(full_batch)
+    }
+}
+
+impl PartitionStream for PgDatabaseTable {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
