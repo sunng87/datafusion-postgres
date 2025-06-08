@@ -90,31 +90,6 @@ impl DfSessionService {
         Ok(QueryResponse::new(Arc::new(fields), Box::pin(row_stream)))
     }
 
-    // Mock pg_namespace response
-    async fn mock_pg_namespace<'a>(&self) -> PgWireResult<QueryResponse<'a>> {
-        let fields = Arc::new(vec![FieldInfo::new(
-            "nspname".to_string(),
-            None,
-            None,
-            Type::VARCHAR,
-            FieldFormat::Text,
-        )]);
-
-        let fields_ref = fields.clone();
-        let rows = self
-            .session_context
-            .catalog_names()
-            .into_iter()
-            .map(move |name| {
-                let mut encoder = pgwire::api::results::DataRowEncoder::new(fields_ref.clone());
-                encoder.encode_field(&Some(&name))?; // Return catalog_name as a schema
-                encoder.finish()
-            });
-
-        let row_stream = futures::stream::iter(rows);
-        Ok(QueryResponse::new(fields.clone(), Box::pin(row_stream)))
-    }
-
     async fn try_respond_set_statements<'a>(
         &self,
         query_lower: &str,
