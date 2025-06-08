@@ -19,6 +19,7 @@ const PG_CATALOG_TABLE_PG_ATTRIBUTE: &str = "pg_attribute";
 const PG_CATALOG_TABLE_PG_NAMESPACE: &str = "pg_namespace";
 const PG_CATALOG_TABLE_PG_PROC: &str = "pg_proc";
 const PG_CATALOG_TABLE_PG_DATABASE: &str = "pg_database";
+const PG_CATALOG_TABLE_PG_AM: &str = "pg_am";
 
 pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_TYPE,
@@ -27,6 +28,7 @@ pub const PG_CATALOG_TABLES: &[&str] = &[
     PG_CATALOG_TABLE_PG_NAMESPACE,
     PG_CATALOG_TABLE_PG_PROC,
     PG_CATALOG_TABLE_PG_DATABASE,
+    PG_CATALOG_TABLE_PG_AM,
 ];
 
 // Create custom schema provider for pg_catalog
@@ -48,8 +50,15 @@ impl SchemaProvider for PgCatalogSchemaProvider {
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         match name.to_ascii_lowercase().as_str() {
             PG_CATALOG_TABLE_PG_TYPE => Some(self.create_pg_type_table()).transpose(),
+            PG_CATALOG_TABLE_PG_AM => Some(self.create_pg_am_table()).transpose(),
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(PgClassTable::new(self.catalog_list.clone()));
+                Ok(Some(Arc::new(
+                    StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
+                )))
+            }
+            PG_CATALOG_TABLE_PG_NAMESPACE => {
+                let table = Arc::new(PgNamespaceTable::new(self.catalog_list.clone()));
                 Ok(Some(Arc::new(
                     StreamingTable::try_new(Arc::clone(table.schema()), vec![table]).unwrap(),
                 )))
@@ -77,6 +86,41 @@ impl PgCatalogSchemaProvider {
             Field::new("typnamespace", DataType::Int32, false),
             Field::new("typlen", DataType::Int16, false),
             // Add other necessary columns
+        ]));
+
+        // Create memory table with schema
+        let provider = MemTable::try_new(schema, vec![])?;
+
+        Ok(Arc::new(provider))
+    }
+
+    /// Create a mock empty table for pg_am
+    fn create_pg_am_table(&self) -> Result<Arc<dyn TableProvider>> {
+        // Define the schema for pg_am
+        // This matches PostgreSQL's pg_am table columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("oid", DataType::Int32, false), // Object identifier
+            Field::new("amname", DataType::Utf8, false), // Name of the access method
+            Field::new("amhandler", DataType::Int32, false), // OID of handler function
+            Field::new("amtype", DataType::Utf8, false), // Type of access method (i=index, t=table)
+            Field::new("amstrategies", DataType::Int32, false), // Number of operator strategies
+            Field::new("amsupport", DataType::Int32, false), // Number of support routines
+            Field::new("amcanorder", DataType::Boolean, false), // Does AM support ordered scans?
+            Field::new("amcanorderbyop", DataType::Boolean, false), // Does AM support order by operator result?
+            Field::new("amcanbackward", DataType::Boolean, false), // Does AM support backward scanning?
+            Field::new("amcanunique", DataType::Boolean, false), // Does AM support unique indexes?
+            Field::new("amcanmulticol", DataType::Boolean, false), // Does AM support multi-column indexes?
+            Field::new("amoptionalkey", DataType::Boolean, false), // Can first index column be omitted in search?
+            Field::new("amsearcharray", DataType::Boolean, false), // Does AM support ScalarArrayOpExpr searches?
+            Field::new("amsearchnulls", DataType::Boolean, false), // Does AM support searching for NULL/NOT NULL?
+            Field::new("amstorage", DataType::Boolean, false), // Can storage type differ from column type?
+            Field::new("amclusterable", DataType::Boolean, false), // Can index be clustered on?
+            Field::new("ampredlocks", DataType::Boolean, false), // Does AM manage fine-grained predicate locks?
+            Field::new("amcanparallel", DataType::Boolean, false), // Does AM support parallel scan?
+            Field::new("amcanbeginscan", DataType::Boolean, false), // Does AM support BRIN index scans?
+            Field::new("amcanmarkpos", DataType::Boolean, false), // Does AM support mark/restore positions?
+            Field::new("amcanfetch", DataType::Boolean, false), // Does AM support fetching specific tuples?
+            Field::new("amkeytype", DataType::Int32, false),    // Type of data in index
         ]));
 
         // Create memory table with schema
@@ -278,6 +322,122 @@ impl PgClassTable {
 }
 
 impl PartitionStream for PgClassTable {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let catalog_list = self.catalog_list.clone();
+        let schema = Arc::clone(&self.schema);
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema.clone(),
+            futures::stream::once(async move { Self::get_data(schema, catalog_list).await }),
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct PgNamespaceTable {
+    schema: SchemaRef,
+    catalog_list: Arc<dyn CatalogProviderList>,
+}
+
+impl PgNamespaceTable {
+    pub fn new(catalog_list: Arc<dyn CatalogProviderList>) -> Self {
+        // Define the schema for pg_namespace
+        // This matches the columns from PostgreSQL's pg_namespace
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("oid", DataType::Int32, false), // Object identifier
+            Field::new("nspname", DataType::Utf8, false), // Name of the namespace (schema)
+            Field::new("nspowner", DataType::Int32, false), // Owner of the namespace
+            Field::new("nspacl", DataType::Utf8, true), // Access privileges
+            Field::new("options", DataType::Utf8, true), // Schema-level options
+        ]));
+
+        Self {
+            schema,
+            catalog_list,
+        }
+    }
+
+    /// Generate record batches based on the current state of the catalog
+    async fn get_data(
+        schema: SchemaRef,
+        catalog_list: Arc<dyn CatalogProviderList>,
+    ) -> Result<RecordBatch> {
+        // Vectors to store column data
+        let mut oids = Vec::new();
+        let mut nspnames = Vec::new();
+        let mut nspowners = Vec::new();
+        let mut nspacls: Vec<Option<String>> = Vec::new();
+        let mut options: Vec<Option<String>> = Vec::new();
+
+        // Start OID counter (should be consistent with the values used in pg_class)
+        let mut next_oid = 10000;
+
+        // Add standard PostgreSQL system schemas
+        // pg_catalog schema (OID 11)
+        oids.push(11);
+        nspnames.push("pg_catalog".to_string());
+        nspowners.push(10); // Default superuser
+        nspacls.push(None);
+        options.push(None);
+
+        // public schema (OID 2200)
+        oids.push(2200);
+        nspnames.push("public".to_string());
+        nspowners.push(10); // Default superuser
+        nspacls.push(None);
+        options.push(None);
+
+        // information_schema (OID 12)
+        oids.push(12);
+        nspnames.push("information_schema".to_string());
+        nspowners.push(10); // Default superuser
+        nspacls.push(None);
+        options.push(None);
+
+        // Now add all schemas from DataFusion catalogs
+        for catalog_name in catalog_list.catalog_names() {
+            if let Some(catalog) = catalog_list.catalog(&catalog_name) {
+                for schema_name in catalog.schema_names() {
+                    // Skip schemas we've already added as system schemas
+                    if schema_name == "pg_catalog"
+                        || schema_name == "public"
+                        || schema_name == "information_schema"
+                    {
+                        continue;
+                    }
+
+                    let schema_oid = next_oid;
+                    next_oid += 1;
+
+                    oids.push(schema_oid);
+                    nspnames.push(schema_name.clone());
+                    nspowners.push(10); // Default owner
+                    nspacls.push(None);
+                    options.push(None);
+                }
+            }
+        }
+
+        // Create Arrow arrays from the collected data
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(oids)),
+            Arc::new(StringArray::from(nspnames)),
+            Arc::new(Int32Array::from(nspowners)),
+            Arc::new(StringArray::from_iter(nspacls.into_iter())),
+            Arc::new(StringArray::from_iter(options.into_iter())),
+        ];
+
+        // Create a full record batch
+        let batch = RecordBatch::try_new(schema.clone(), arrays)?;
+
+        Ok(batch)
+    }
+}
+
+impl PartitionStream for PgNamespaceTable {
     fn schema(&self) -> &SchemaRef {
         &self.schema
     }
