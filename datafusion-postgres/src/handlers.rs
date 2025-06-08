@@ -116,25 +116,30 @@ impl DfSessionService {
         Ok(QueryResponse::new(fields.clone(), Box::pin(row_stream)))
     }
 
-    async fn try_respond_set_time_zone<'a>(
+    async fn try_respond_set_statements<'a>(
         &self,
         query_lower: &str,
     ) -> PgWireResult<Option<Response<'a>>> {
-        if query_lower.starts_with("set time zone") {
-            let parts: Vec<&str> = query_lower.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let tz = parts[3].trim_matches('"');
-                let mut timezone = self.timezone.lock().await;
-                *timezone = tz.to_string();
-                Ok(Some(Response::Execution(Tag::new("SET"))))
+        if query_lower.starts_with("set") {
+            if query_lower.starts_with("set time zone") {
+                let parts: Vec<&str> = query_lower.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    let tz = parts[3].trim_matches('"');
+                    let mut timezone = self.timezone.lock().await;
+                    *timezone = tz.to_string();
+                    Ok(Some(Response::Execution(Tag::new("SET"))))
+                } else {
+                    Err(PgWireError::UserError(Box::new(
+                        pgwire::error::ErrorInfo::new(
+                            "ERROR".to_string(),
+                            "42601".to_string(),
+                            "Invalid SET TIME ZONE syntax".to_string(),
+                        ),
+                    )))
+                }
             } else {
-                Err(PgWireError::UserError(Box::new(
-                    pgwire::error::ErrorInfo::new(
-                        "ERROR".to_string(),
-                        "42601".to_string(),
-                        "Invalid SET TIME ZONE syntax".to_string(),
-                    ),
-                )))
+                // noop: skip any unsupported set statements
+                Ok(Some(Response::Execution(Tag::new("SET"))))
             }
         } else {
             Ok(None)
@@ -228,7 +233,7 @@ impl SimpleQueryHandler for DfSessionService {
         let query_lower = query.to_lowercase().trim().to_string();
         log::debug!("Received query: {}", query); // Log the query for debugging
 
-        if let Some(resp) = self.try_respond_set_time_zone(&query_lower).await? {
+        if let Some(resp) = self.try_respond_set_statements(&query_lower).await? {
             return Ok(vec![resp]);
         }
 
@@ -278,7 +283,7 @@ impl SimpleQueryHandler for DfSessionService {
 
 #[async_trait]
 impl ExtendedQueryHandler for DfSessionService {
-    type Statement = LogicalPlan;
+    type Statement = (String, LogicalPlan);
     type QueryParser = Parser;
 
     fn query_parser(&self) -> Arc<Self::QueryParser> {
@@ -293,7 +298,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let plan = &target.statement;
+        let (_, plan) = &target.statement;
         let schema = plan.schema();
         let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
         let params = plan
@@ -322,7 +327,7 @@ impl ExtendedQueryHandler for DfSessionService {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let plan = &target.statement.statement;
+        let (_, plan) = &target.statement.statement;
         let format = &target.result_column_format;
         let schema = plan.schema();
         let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), format)?;
@@ -342,11 +347,15 @@ impl ExtendedQueryHandler for DfSessionService {
         let query = portal
             .statement
             .statement
-            .to_string()
+            .0
             .to_lowercase()
             .trim()
             .to_string();
-        log::debug!("Received extended query: {}", query); // Log for debugging
+        log::debug!("Received execute extended query: {}", query); // Log for debugging
+
+        if let Some(resp) = self.try_respond_set_statements(&query).await? {
+            return Ok(resp);
+        }
 
         if let Some(resp) = self.try_respond_show_statements(&query).await? {
             return Ok(resp);
@@ -356,7 +365,7 @@ impl ExtendedQueryHandler for DfSessionService {
             return Ok(resp);
         }
 
-        let plan = &portal.statement.statement;
+        let (_, plan) = &portal.statement.statement;
         let param_types = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -382,7 +391,7 @@ pub struct Parser {
 
 #[async_trait]
 impl QueryParser for Parser {
-    type Statement = LogicalPlan;
+    type Statement = (String, LogicalPlan);
 
     async fn parse_sql<C>(
         &self,
@@ -390,6 +399,7 @@ impl QueryParser for Parser {
         sql: &str,
         _types: &[Type],
     ) -> PgWireResult<Self::Statement> {
+        log::debug!("Received parse extended query: {}", sql); // Log for debugging
         let context = &self.session_context;
         let state = context.state();
         let logical_plan = state
@@ -399,7 +409,7 @@ impl QueryParser for Parser {
         let optimised = state
             .optimize(&logical_plan)
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
-        Ok(optimised)
+        Ok((sql.to_string(), optimised))
     }
 }
 
