@@ -49,8 +49,8 @@ impl SchemaProvider for PgCatalogSchemaProvider {
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         match name.to_ascii_lowercase().as_str() {
-            PG_CATALOG_TABLE_PG_TYPE => Some(self.create_pg_type_table()).transpose(),
-            PG_CATALOG_TABLE_PG_AM => Some(self.create_pg_am_table()).transpose(),
+            PG_CATALOG_TABLE_PG_TYPE => Ok(Some(self.create_pg_type_table())),
+            PG_CATALOG_TABLE_PG_AM => Ok(Some(self.create_pg_am_table())),
             PG_CATALOG_TABLE_PG_CLASS => {
                 let table = Arc::new(PgClassTable::new(self.catalog_list.clone()));
                 Ok(Some(Arc::new(
@@ -84,7 +84,7 @@ impl PgCatalogSchemaProvider {
     }
 
     /// Create a mock empty table for pg_type
-    fn create_pg_type_table(&self) -> Result<Arc<dyn TableProvider>> {
+    fn create_pg_type_table(&self) -> Arc<dyn TableProvider> {
         // Define schema for pg_type
         let schema = Arc::new(Schema::new(vec![
             Field::new("oid", DataType::Int32, false),
@@ -95,13 +95,13 @@ impl PgCatalogSchemaProvider {
         ]));
 
         // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![])?;
+        let provider = MemTable::try_new(schema, vec![]).unwrap();
 
-        Ok(Arc::new(provider))
+        Arc::new(provider)
     }
 
     /// Create a mock empty table for pg_am
-    fn create_pg_am_table(&self) -> Result<Arc<dyn TableProvider>> {
+    fn create_pg_am_table(&self) -> Arc<dyn TableProvider> {
         // Define the schema for pg_am
         // This matches PostgreSQL's pg_am table columns
         let schema = Arc::new(Schema::new(vec![
@@ -130,9 +130,9 @@ impl PgCatalogSchemaProvider {
         ]));
 
         // Create memory table with schema
-        let provider = MemTable::try_new(schema, vec![])?;
+        let provider = MemTable::try_new(schema, vec![]).unwrap();
 
-        Ok(Arc::new(provider))
+        Arc::new(provider)
     }
 }
 
