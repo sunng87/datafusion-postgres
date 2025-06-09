@@ -6,7 +6,7 @@ use datafusion::execution::options::{
     ArrowReadOptions, AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_postgres::pg_catalog::PgCatalogSchemaProvider;
+use datafusion_postgres::pg_catalog::setup_pg_catalog;
 use datafusion_postgres::{serve, ServerOptions}; // Assuming the crate name is `datafusion_postgres`
 use structopt::StructOpt;
 
@@ -171,11 +171,7 @@ async fn setup_session_context(
     }
 
     // Register pg_catalog
-    let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
-    session_context
-        .catalog("datafusion")
-        .unwrap()
-        .register_schema("pg_catalog", Arc::new(pg_catalog))?;
+    setup_pg_catalog(session_context, "datafusion")?;
 
     Ok(())
 }
