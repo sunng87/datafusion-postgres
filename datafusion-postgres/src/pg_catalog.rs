@@ -10,7 +10,7 @@ use datafusion::catalog::streaming::StreamingTable;
 use datafusion::catalog::{CatalogProviderList, MemTable, SchemaProvider};
 use datafusion::common::utils::SingleRowListArrayBuilder;
 use datafusion::datasource::TableProvider;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -653,11 +653,16 @@ pub fn create_current_schema_udf() -> ScalarUDF {
 }
 
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
-pub fn setup_pg_catalog(session_context: &SessionContext) -> Result<()> {
+pub fn setup_pg_catalog(session_context: &SessionContext, catalog_name: &str) -> Result<()> {
     let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
     session_context
-        .catalog("datafusion")
-        .unwrap()
+        .catalog(catalog_name)
+        .ok_or_else(|| {
+            DataFusionError::Configuration(format!(
+                "Catalog not found when registering pg_catalog: {}",
+                catalog_name
+            ))
+        })?
         .register_schema("pg_catalog", Arc::new(pg_catalog))?;
 
     session_context.register_udf(create_current_schema_udf());

@@ -171,7 +171,7 @@ async fn setup_session_context(
     }
 
     // Register pg_catalog
-    setup_pg_catalog(session_context)?;
+    setup_pg_catalog(session_context, "datafusion")?;
 
     Ok(())
 }
