@@ -653,7 +653,10 @@ pub fn create_current_schema_udf() -> ScalarUDF {
 }
 
 /// Install pg_catalog and postgres UDFs to current `SessionContext`
-pub fn setup_pg_catalog(session_context: &SessionContext, catalog_name: &str) -> Result<()> {
+pub fn setup_pg_catalog(
+    session_context: &SessionContext,
+    catalog_name: &str,
+) -> Result<(), Box<DataFusionError>> {
     let pg_catalog = PgCatalogSchemaProvider::new(session_context.state().catalog_list().clone());
     session_context
         .catalog(catalog_name)
