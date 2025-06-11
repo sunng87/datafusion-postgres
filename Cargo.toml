@@ -9,8 +9,8 @@ license = "Apache-2.0"
 rust-version = "1.82.0"
 authors = ["Ning Sun <n@sunng.info>"]
 keywords = ["database", "postgresql", "datafusion"]
-homepage = "https://github.com/sunng87/datafusion-postgres/"
-repository = "https://github.com/sunng87/datafusion-postgres/"
+homepage = "https://github.com/datafusion-contrib/datafusion-postgres/"
+repository = "https://github.com/datafusion-contrib/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
