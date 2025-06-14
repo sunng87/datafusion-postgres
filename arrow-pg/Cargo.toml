@@ -1,0 +1,20 @@
+[package]
+name = "arrow-pg"
+description = "Arrow data mapping and encoding/decoding for Postgres"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+readme = "../README.md"
+
+[dependencies]
+arrow.workspace = true
+bytes = "1"
+chrono = { version = "0.4", features = ["std"] }
+pgwire = { workspace = true, default-features = false }
+postgres-types.workspace = true
+rust_decimal = { version = "1.37", features = ["db-postgres"] }

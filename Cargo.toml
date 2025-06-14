@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["datafusion-postgres", "datafusion-postgres-cli"]
+members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg"]
 
 [workspace.package]
 version = "0.5.1"
@@ -14,8 +14,10 @@ repository = "https://github.com/datafusion-contrib/datafusion-postgres/"
 documentation = "https://docs.rs/crate/datafusion-postgres/"
 
 [workspace.dependencies]
-pgwire = "0.30.2"
+arrow = "55"
 datafusion = { version = "47", default-features = false }
+pgwire = "0.30.2"
+postgres-types = "0.2"
 tokio = { version = "1", default-features = false }
 
 [profile.release]
