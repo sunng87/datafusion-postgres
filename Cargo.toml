@@ -17,7 +17,7 @@ documentation = "https://docs.rs/crate/datafusion-postgres/"
 arrow = "55"
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["std"] }
-datafusion = { version = "47", default-features = false }
+datafusion = { version = "48", default-features = false }
 futures = "0.3"
 pgwire = "0.30.2"
 postgres-types = "0.2"
