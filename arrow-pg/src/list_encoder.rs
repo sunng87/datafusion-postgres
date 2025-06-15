@@ -16,11 +16,15 @@ use arrow::{
 };
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
+use pgwire::api::results::FieldFormat;
+use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::types::{ToSqlText, QUOTE_ESCAPE};
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
 
-use super::{struct_encoder::encode_struct, EncodedValue, FieldFormat, Result, ToSqlError};
+use crate::encoder::EncodedValue;
+use crate::error::ToSqlError;
+use crate::struct_encoder::encode_struct;
 
 fn get_bool_list_value(arr: &Arc<dyn Array>) -> Vec<Option<bool>> {
     arr.as_any()
@@ -72,7 +76,7 @@ fn encode_field<T: ToSql + ToSqlText>(
     t: &[T],
     type_: &Type,
     format: FieldFormat,
-) -> Result<EncodedValue> {
+) -> PgWireResult<EncodedValue> {
     let mut bytes = BytesMut::new();
     match format {
         FieldFormat::Text => t.to_sql_text(type_, &mut bytes)?,
@@ -85,7 +89,7 @@ pub(crate) fn encode_list(
     arr: Arc<dyn Array>,
     type_: &Type,
     format: FieldFormat,
-) -> Result<EncodedValue> {
+) -> PgWireResult<EncodedValue> {
     match arr.data_type() {
         DataType::Null => {
             let mut bytes = BytesMut::new();
@@ -223,7 +227,8 @@ pub(crate) fn encode_list(
                     .iter();
 
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
+                    let tz = Tz::from_str(tz.as_ref())
+                        .map_err(|e| PgWireError::ApiError(ToSqlError::from(e)))?;
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.and_then(|i| {
@@ -357,7 +362,7 @@ pub(crate) fn encode_list(
             })
             .map_err(ToSqlError::from)?;
 
-            let values: Result<Vec<_>> = (0..arr.len())
+            let values: PgWireResult<Vec<_>> = (0..arr.len())
                 .map(|row| encode_struct(&arr, row, fields, format))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
@@ -385,9 +390,9 @@ pub(crate) fn encode_list(
             encode_field(&values?, type_, format)
         }
         // TODO: more types
-        list_type => Err(ToSqlError::from(format!(
+        list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(
             "Unsupported List Datatype {} and array {:?}",
             list_type, &arr
-        ))),
+        )))),
     }
 }

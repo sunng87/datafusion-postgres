@@ -2,17 +2,19 @@ use std::sync::Arc;
 
 use arrow::array::{Array, StructArray};
 use bytes::{BufMut, BytesMut};
+use pgwire::api::results::FieldFormat;
+use pgwire::error::PgWireResult;
 use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
 use postgres_types::{Field, IsNull, ToSql, Type};
 
-use super::{encode_value, EncodedValue, FieldFormat, Result};
+use crate::encoder::{encode_value, EncodedValue, Encoder};
 
 pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
     fields: &[Field],
     format: FieldFormat,
-) -> Result<Option<EncodedValue>> {
+) -> PgWireResult<Option<EncodedValue>> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
         return Ok(None);
@@ -44,13 +46,13 @@ impl StructEncoder {
     }
 }
 
-impl super::Encoder for StructEncoder {
+impl Encoder for StructEncoder {
     fn encode_field_with_type_and_format<T>(
         &mut self,
         value: &T,
         data_type: &Type,
         format: FieldFormat,
-    ) -> Result<()>
+    ) -> PgWireResult<()>
     where
         T: ToSql + ToSqlText + Sized,
     {

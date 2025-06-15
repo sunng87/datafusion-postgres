@@ -15,6 +15,7 @@ readme = "../README.md"
 arrow.workspace = true
 bytes = "1"
 chrono = { version = "0.4", features = ["std"] }
-pgwire = { workspace = true, default-features = false }
+futures.workspace = true
+pgwire.workspace = true
 postgres-types.workspace = true
 rust_decimal = { version = "1.37", features = ["db-postgres"] }

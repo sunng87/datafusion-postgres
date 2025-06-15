@@ -12,12 +12,15 @@ documentation.workspace = true
 readme = "../README.md"
 
 [dependencies]
+arrow-pg = { path = "../arrow-pg", version = "0.1" }
 async-trait = "0.1"
 bytes = "1.10.1"
+chrono = { version = "0.4", features = ["std"] }
 datafusion = { workspace = true }
-futures = "0.3"
+futures.workspace = true
 getset = "0.1"
 log = "0.4"
 pgwire = { workspace = true }
 postgres-types.workspace = true
+rust_decimal = { version = "1.37", features = ["db-postgres"] }
 tokio = { version = "1.45", features = ["sync", "net"] }

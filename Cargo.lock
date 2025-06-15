@@ -358,6 +358,7 @@ dependencies = [
  "arrow",
  "bytes",
  "chrono",
+ "futures",
  "pgwire",
  "postgres-types",
  "rust_decimal",
@@ -1530,14 +1531,17 @@ dependencies = [
 name = "datafusion-postgres"
 version = "0.5.1"
 dependencies = [
+ "arrow-pg",
  "async-trait",
  "bytes",
+ "chrono",
  "datafusion",
  "futures",
  "getset",
  "log",
  "pgwire",
  "postgres-types",
+ "rust_decimal",
  "tokio",
 ]
 

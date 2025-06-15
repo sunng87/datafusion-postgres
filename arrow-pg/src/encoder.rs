@@ -1,27 +1,27 @@
+use std::error::Error;
 use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::*;
+use arrow::datatypes::*;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::array::*;
-use datafusion::arrow::datatypes::*;
-use list_encoder::encode_list;
 use pgwire::api::results::DataRowEncoder;
 use pgwire::api::results::FieldFormat;
-use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::error::PgWireError;
+use pgwire::error::PgWireResult;
 use pgwire::types::ToSqlText;
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
-use struct_encoder::encode_struct;
 use timezone::Tz;
 
-pub mod list_encoder;
-pub mod row_encoder;
-pub mod struct_encoder;
+use crate::error::ToSqlError;
+use crate::list_encoder::encode_list;
+use crate::struct_encoder::encode_struct;
 
-trait Encoder {
+pub trait Encoder {
     fn encode_field_with_type_and_format<T>(
         &mut self,
         value: &T,
@@ -61,7 +61,7 @@ impl ToSql for EncodedValue {
         &self,
         _ty: &Type,
         out: &mut BytesMut,
-    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
     where
         Self: Sized,
     {
@@ -80,7 +80,7 @@ impl ToSql for EncodedValue {
         &self,
         ty: &Type,
         out: &mut BytesMut,
-    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>> {
         self.to_sql(ty, out)
     }
 }
@@ -90,7 +90,7 @@ impl ToSqlText for EncodedValue {
         &self,
         _ty: &Type,
         out: &mut BytesMut,
-    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    ) -> Result<postgres_types::IsNull, Box<dyn Error + Send + Sync>>
     where
         Self: Sized,
     {
@@ -261,16 +261,13 @@ fn get_numeric_128_value(
                 }
                 _ => unreachable!(),
             };
-            PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                message.to_owned(),
-            )))
+            // TODO: add error type in PgWireError
+            PgWireError::ApiError(ToSqlError::from(message))
         })
         .map(Some)
 }
 
-fn encode_value<T: Encoder>(
+pub fn encode_value<T: Encoder>(
     encoder: &mut T,
     arr: &Arc<dyn Array>,
     idx: usize,
@@ -387,8 +384,7 @@ fn encode_value<T: Encoder>(
                 }
                 let ts_array = arr.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
@@ -411,8 +407,7 @@ fn encode_value<T: Encoder>(
                     .downcast_ref::<TimestampMillisecondArray>()
                     .unwrap();
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
@@ -435,8 +430,7 @@ fn encode_value<T: Encoder>(
                     .downcast_ref::<TimestampMicrosecondArray>()
                     .unwrap();
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
@@ -459,8 +453,7 @@ fn encode_value<T: Encoder>(
                     .downcast_ref::<TimestampNanosecondArray>()
                     .unwrap();
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value = ts_array
                         .value_as_datetime_with_tz(idx, tz)
                         .map(|d| d.fixed_offset());
@@ -483,11 +476,10 @@ fn encode_value<T: Encoder>(
             let fields = match type_.kind() {
                 postgres_types::Kind::Composite(fields) => fields,
                 _ => {
-                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!("Failed to unwrap a composite type from type {}", type_),
-                    ))))
+                    return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                        "Failed to unwrap a composite type from type {}",
+                        type_
+                    ))));
                 }
             };
             let value = encode_struct(arr, idx, fields, format)?;
@@ -517,14 +509,10 @@ fn encode_value<T: Encoder>(
                 .or_else(|| get_dict_values!(UInt32Type))
                 .or_else(|| get_dict_values!(UInt64Type))
                 .ok_or_else(|| {
-                    PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!(
-                            "Unsupported dictionary key type for value type {}",
-                            value_type
-                        ),
-                    )))
+                    ToSqlError::from(format!(
+                        "Unsupported dictionary key type for value type {}",
+                        value_type
+                    ))
                 })?;
 
             // If the dictionary has only one value, treat it as a primitive
@@ -536,15 +524,11 @@ fn encode_value<T: Encoder>(
             }
         }
         _ => {
-            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                format!(
-                    "Unsupported Datatype {} and array {:?}",
-                    arr.data_type(),
-                    &arr
-                ),
-            ))))
+            return Err(PgWireError::ApiError(ToSqlError::from(format!(
+                "Unsupported Datatype {} and array {:?}",
+                arr.data_type(),
+                &arr
+            ))));
         }
     }
 
