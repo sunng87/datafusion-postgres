@@ -352,6 +352,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrow-pg"
+version = "0.0.1"
+dependencies = [
+ "arrow",
+ "bytes",
+ "chrono",
+ "futures",
+ "pgwire",
+ "postgres-types",
+ "rust_decimal",
+]
+
+[[package]]
 name = "arrow-row"
 version = "55.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1518,6 +1531,7 @@ dependencies = [
 name = "datafusion-postgres"
 version = "0.5.1"
 dependencies = [
+ "arrow-pg",
  "async-trait",
  "bytes",
  "chrono",

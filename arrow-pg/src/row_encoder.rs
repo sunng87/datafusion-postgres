@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
+use arrow::array::RecordBatch;
 use pgwire::{
     api::results::{DataRowEncoder, FieldInfo},
     error::PgWireResult,
     messages::data::DataRow,
 };
 
-use super::encode_value;
+use crate::encoder::encode_value;
 
 pub struct RowEncoder {
     rb: RecordBatch,

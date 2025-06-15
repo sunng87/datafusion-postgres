@@ -1,5 +1,4 @@
 mod datatypes;
-mod encoder;
 mod handlers;
 pub mod pg_catalog;
 

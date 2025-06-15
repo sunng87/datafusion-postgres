@@ -1,22 +1,20 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
+use arrow::array::{Array, StructArray};
 use bytes::{BufMut, BytesMut};
-use datafusion::arrow::array::{Array, StructArray};
-use pgwire::{
-    api::results::FieldFormat,
-    error::PgWireResult,
-    types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE},
-};
+use pgwire::api::results::FieldFormat;
+use pgwire::error::PgWireResult;
+use pgwire::types::{ToSqlText, QUOTE_CHECK, QUOTE_ESCAPE};
 use postgres_types::{Field, IsNull, ToSql, Type};
 
-use super::{encode_value, EncodedValue};
+use crate::encoder::{encode_value, EncodedValue, Encoder};
 
-pub fn encode_struct(
+pub(crate) fn encode_struct(
     arr: &Arc<dyn Array>,
     idx: usize,
     fields: &[Field],
     format: FieldFormat,
-) -> Result<Option<EncodedValue>, Box<dyn Error + Send + Sync>> {
+) -> PgWireResult<Option<EncodedValue>> {
     let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
     if arr.is_null(idx) {
         return Ok(None);
@@ -32,14 +30,14 @@ pub fn encode_struct(
     }))
 }
 
-struct StructEncoder {
+pub(crate) struct StructEncoder {
     num_cols: usize,
     curr_col: usize,
     row_buffer: BytesMut,
 }
 
 impl StructEncoder {
-    fn new(num_cols: usize) -> Self {
+    pub(crate) fn new(num_cols: usize) -> Self {
         Self {
             num_cols,
             curr_col: 0,
@@ -48,7 +46,7 @@ impl StructEncoder {
     }
 }
 
-impl super::Encoder for StructEncoder {
+impl Encoder for StructEncoder {
     fn encode_field_with_type_and_format<T>(
         &mut self,
         value: &T,
