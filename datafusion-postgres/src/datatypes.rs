@@ -3,140 +3,27 @@ use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset};
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::datatypes::*;
+use datafusion::arrow::datatypes::{DataType, Date32Type};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{DFSchema, ParamValues};
+use datafusion::common::ParamValues;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use futures::{stream, StreamExt};
 use pgwire::api::portal::{Format, Portal};
-use pgwire::api::results::{FieldInfo, QueryResponse};
+use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::data::DataRow;
-use postgres_types::Kind;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
-use crate::encoder::row_encoder::RowEncoder;
-
-pub(crate) fn into_pg_type(df_type: &DataType) -> PgWireResult<Type> {
-    Ok(match df_type {
-        DataType::Null => Type::UNKNOWN,
-        DataType::Boolean => Type::BOOL,
-        DataType::Int8 | DataType::UInt8 => Type::CHAR,
-        DataType::Int16 | DataType::UInt16 => Type::INT2,
-        DataType::Int32 | DataType::UInt32 => Type::INT4,
-        DataType::Int64 | DataType::UInt64 => Type::INT8,
-        DataType::Timestamp(_, tz) => {
-            if tz.is_some() {
-                Type::TIMESTAMPTZ
-            } else {
-                Type::TIMESTAMP
-            }
-        }
-        DataType::Time32(_) | DataType::Time64(_) => Type::TIME,
-        DataType::Date32 | DataType::Date64 => Type::DATE,
-        DataType::Interval(_) => Type::INTERVAL,
-        DataType::Binary | DataType::FixedSizeBinary(_) | DataType::LargeBinary => Type::BYTEA,
-        DataType::Float16 | DataType::Float32 => Type::FLOAT4,
-        DataType::Float64 => Type::FLOAT8,
-        DataType::Decimal128(_, _) => Type::NUMERIC,
-        DataType::Utf8 => Type::VARCHAR,
-        DataType::LargeUtf8 => Type::TEXT,
-        DataType::List(field) | DataType::FixedSizeList(field, _) | DataType::LargeList(field) => {
-            match field.data_type() {
-                DataType::Boolean => Type::BOOL_ARRAY,
-                DataType::Int8 | DataType::UInt8 => Type::CHAR_ARRAY,
-                DataType::Int16 | DataType::UInt16 => Type::INT2_ARRAY,
-                DataType::Int32 | DataType::UInt32 => Type::INT4_ARRAY,
-                DataType::Int64 | DataType::UInt64 => Type::INT8_ARRAY,
-                DataType::Timestamp(_, tz) => {
-                    if tz.is_some() {
-                        Type::TIMESTAMPTZ_ARRAY
-                    } else {
-                        Type::TIMESTAMP_ARRAY
-                    }
-                }
-                DataType::Time32(_) | DataType::Time64(_) => Type::TIME_ARRAY,
-                DataType::Date32 | DataType::Date64 => Type::DATE_ARRAY,
-                DataType::Interval(_) => Type::INTERVAL_ARRAY,
-                DataType::FixedSizeBinary(_) | DataType::Binary => Type::BYTEA_ARRAY,
-                DataType::Float16 | DataType::Float32 => Type::FLOAT4_ARRAY,
-                DataType::Float64 => Type::FLOAT8_ARRAY,
-                DataType::Utf8 => Type::VARCHAR_ARRAY,
-                DataType::LargeUtf8 => Type::TEXT_ARRAY,
-                struct_type @ DataType::Struct(_) => Type::new(
-                    Type::RECORD_ARRAY.name().into(),
-                    Type::RECORD_ARRAY.oid(),
-                    Kind::Array(into_pg_type(struct_type)?),
-                    Type::RECORD_ARRAY.schema().into(),
-                ),
-                list_type => {
-                    return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                        "ERROR".to_owned(),
-                        "XX000".to_owned(),
-                        format!("Unsupported List Datatype {list_type}"),
-                    ))));
-                }
-            }
-        }
-        DataType::Utf8View => Type::TEXT,
-        DataType::Dictionary(_, value_type) => into_pg_type(value_type)?,
-        DataType::Struct(fields) => {
-            let name: String = fields
-                .iter()
-                .map(|x| x.name().clone())
-                .reduce(|a, b| a + ", " + &b)
-                .map(|x| format!("({x})"))
-                .unwrap_or("()".to_string());
-            let kind = Kind::Composite(
-                fields
-                    .iter()
-                    .map(|x| {
-                        into_pg_type(x.data_type())
-                            .map(|_type| postgres_types::Field::new(x.name().clone(), _type))
-                    })
-                    .collect::<Result<Vec<_>, PgWireError>>()?,
-            );
-            Type::new(name, Type::RECORD.oid(), kind, Type::RECORD.schema().into())
-        }
-        _ => {
-            return Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                format!("Unsupported Datatype {df_type}"),
-            ))));
-        }
-    })
-}
-
-pub(crate) fn df_schema_to_pg_fields(
-    schema: &DFSchema,
-    format: &Format,
-) -> PgWireResult<Vec<FieldInfo>> {
-    schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(idx, f)| {
-            let pg_type = into_pg_type(f.data_type())?;
-            Ok(FieldInfo::new(
-                f.name().into(),
-                None,
-                None,
-                pg_type,
-                format.format_for(idx),
-            ))
-        })
-        .collect::<PgWireResult<Vec<FieldInfo>>>()
-}
+use arrow_pg::datatypes::{arrow_schema_to_pg_fields, encode_recordbatch, into_pg_type};
 
 pub(crate) async fn encode_dataframe<'a>(
     df: DataFrame,
     format: &Format,
 ) -> PgWireResult<QueryResponse<'a>> {
-    let fields = Arc::new(df_schema_to_pg_fields(df.schema(), format)?);
+    let fields = Arc::new(arrow_schema_to_pg_fields(df.schema().as_arrow(), format)?);
 
     let recordbatch_stream = df
         .execute_stream()
@@ -148,11 +35,7 @@ pub(crate) async fn encode_dataframe<'a>(
         .map(move |rb: datafusion::error::Result<RecordBatch>| {
             let row_stream: Box<dyn Iterator<Item = PgWireResult<DataRow>> + Send + Sync> = match rb
             {
-                Ok(rb) => {
-                    let fields = fields_ref.clone();
-                    let mut row_stream = RowEncoder::new(rb, fields);
-                    Box::new(std::iter::from_fn(move || row_stream.next_row()))
-                }
+                Ok(rb) => encode_recordbatch(fields_ref.clone(), rb),
                 Err(e) => Box::new(iter::once(Err(PgWireError::ApiError(e.into())))),
             };
             stream::iter(row_stream)

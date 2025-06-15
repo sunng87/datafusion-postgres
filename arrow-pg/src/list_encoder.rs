@@ -1,14 +1,12 @@
-use std::{error::Error, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 
-use bytes::{BufMut, BytesMut};
-use chrono::{DateTime, TimeZone, Utc};
-use datafusion::arrow::array::{
+use arrow::array::{
     timezone::Tz, Array, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
     LargeBinaryArray, PrimitiveArray, StringArray, Time32MillisecondArray, Time32SecondArray,
     Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
-use datafusion::arrow::{
+use arrow::{
     datatypes::{
         DataType, Date32Type, Date64Type, Float32Type, Float64Type, Int16Type, Int32Type,
         Int64Type, Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
@@ -16,15 +14,17 @@ use datafusion::arrow::{
     },
     temporal_conversions::{as_date, as_time},
 };
-use pgwire::{
-    api::results::FieldFormat,
-    error::{ErrorInfo, PgWireError},
-    types::{ToSqlText, QUOTE_ESCAPE},
-};
+use bytes::{BufMut, BytesMut};
+use chrono::{DateTime, TimeZone, Utc};
+use pgwire::api::results::FieldFormat;
+use pgwire::error::{PgWireError, PgWireResult};
+use pgwire::types::{ToSqlText, QUOTE_ESCAPE};
 use postgres_types::{ToSql, Type};
 use rust_decimal::Decimal;
 
-use super::{struct_encoder::encode_struct, EncodedValue};
+use crate::encoder::EncodedValue;
+use crate::error::ToSqlError;
+use crate::struct_encoder::encode_struct;
 
 fn get_bool_list_value(arr: &Arc<dyn Array>) -> Vec<Option<bool>> {
     arr.as_any()
@@ -76,7 +76,7 @@ fn encode_field<T: ToSql + ToSqlText>(
     t: &[T],
     type_: &Type,
     format: FieldFormat,
-) -> Result<EncodedValue, Box<dyn Error + Send + Sync>> {
+) -> PgWireResult<EncodedValue> {
     let mut bytes = BytesMut::new();
     match format {
         FieldFormat::Text => t.to_sql_text(type_, &mut bytes)?,
@@ -89,7 +89,7 @@ pub(crate) fn encode_list(
     arr: Arc<dyn Array>,
     type_: &Type,
     format: FieldFormat,
-) -> Result<EncodedValue, Box<dyn Error + Send + Sync>> {
+) -> PgWireResult<EncodedValue> {
     match arr.data_type() {
         DataType::Null => {
             let mut bytes = BytesMut::new();
@@ -228,7 +228,7 @@ pub(crate) fn encode_list(
 
                 if let Some(tz) = timezone {
                     let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                        .map_err(|e| PgWireError::ApiError(ToSqlError::from(e)))?;
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.and_then(|i| {
@@ -258,8 +258,7 @@ pub(crate) fn encode_list(
                     .iter();
 
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.and_then(|i| {
@@ -291,8 +290,7 @@ pub(crate) fn encode_list(
                     .iter();
 
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.and_then(|i| {
@@ -324,8 +322,7 @@ pub(crate) fn encode_list(
                     .iter();
 
                 if let Some(tz) = timezone {
-                    let tz = Tz::from_str(tz.as_ref())
-                        .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+                    let tz = Tz::from_str(tz.as_ref()).map_err(ToSqlError::from)?;
                     let value: Vec<_> = array_iter
                         .map(|i| {
                             i.map(|i| {
@@ -363,12 +360,9 @@ pub(crate) fn encode_list(
                     type_.kind()
                 )),
             })
-            .map_err(|err| {
-                let err = ErrorInfo::new("ERROR".to_owned(), "XX000".to_owned(), err);
-                Box::new(PgWireError::UserError(Box::new(err)))
-            })?;
+            .map_err(ToSqlError::from)?;
 
-            let values: Result<Vec<_>, _> = (0..arr.len())
+            let values: PgWireResult<Vec<_>> = (0..arr.len())
                 .map(|row| encode_struct(&arr, row, fields, format))
                 .map(|x| {
                     if matches!(format, FieldFormat::Text) {
@@ -396,17 +390,9 @@ pub(crate) fn encode_list(
             encode_field(&values?, type_, format)
         }
         // TODO: more types
-        list_type => {
-            let err = PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                format!(
-                    "Unsupported List Datatype {} and array {:?}",
-                    list_type, &arr
-                ),
-            )));
-
-            Err(Box::new(err))
-        }
+        list_type => Err(PgWireError::ApiError(ToSqlError::from(format!(
+            "Unsupported List Datatype {} and array {:?}",
+            list_type, &arr
+        )))),
     }
 }

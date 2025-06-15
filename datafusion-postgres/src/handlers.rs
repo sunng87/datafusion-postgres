@@ -16,10 +16,11 @@ use pgwire::api::results::{
 use pgwire::api::stmt::QueryParser;
 use pgwire::api::stmt::StoredStatement;
 use pgwire::api::{ClientInfo, NoopErrorHandler, PgWireServerHandlers, Type};
+use pgwire::error::{PgWireError, PgWireResult};
 use tokio::sync::Mutex;
 
 use crate::datatypes;
-use pgwire::error::{PgWireError, PgWireResult};
+use arrow_pg::datatypes::{arrow_schema_to_pg_fields, into_pg_type};
 
 pub struct HandlerFactory(pub Arc<DfSessionService>);
 
@@ -237,7 +238,7 @@ impl ExtendedQueryHandler for DfSessionService {
     {
         let (_, plan) = &target.statement;
         let schema = plan.schema();
-        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), &Format::UnifiedBinary)?;
+        let fields = arrow_schema_to_pg_fields(schema.as_arrow(), &Format::UnifiedBinary)?;
         let params = plan
             .get_parameter_types()
             .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
@@ -246,7 +247,7 @@ impl ExtendedQueryHandler for DfSessionService {
         for param_type in ordered_param_types(&params).iter() {
             // Fixed: Use &params
             if let Some(datatype) = param_type {
-                let pgtype = datatypes::into_pg_type(datatype)?;
+                let pgtype = into_pg_type(datatype)?;
                 param_types.push(pgtype);
             } else {
                 param_types.push(Type::UNKNOWN);
@@ -267,7 +268,7 @@ impl ExtendedQueryHandler for DfSessionService {
         let (_, plan) = &target.statement.statement;
         let format = &target.result_column_format;
         let schema = plan.schema();
-        let fields = datatypes::df_schema_to_pg_fields(schema.as_ref(), format)?;
+        let fields = arrow_schema_to_pg_fields(schema.as_arrow(), format)?;
 
         Ok(DescribePortalResponse::new(fields))
     }
