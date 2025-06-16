@@ -12,7 +12,7 @@ documentation.workspace = true
 readme = "../README.md"
 
 [dependencies]
-arrow-pg = { path = "../arrow-pg", version = "0.0.1" }
+arrow-pg = { path = "../arrow-pg", version = "0.1.0" }
 bytes.workspace = true
 async-trait = "0.1"
 chrono.workspace = true

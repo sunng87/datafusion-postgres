@@ -15,6 +15,6 @@ readme = "../README.md"
 pgwire = { workspace = true }
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 tokio = { workspace = true, features = ["full"] }
-datafusion-postgres = { path = "../datafusion-postgres", version = "0.5.1" }
+datafusion-postgres = { path = "../datafusion-postgres", version = "0.6.0" }
 structopt = { version = "0.3", default-features = false }
 env_logger = "0.11"

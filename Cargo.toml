@@ -3,7 +3,7 @@ resolver = "2"
 members = ["datafusion-postgres", "datafusion-postgres-cli", "arrow-pg"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.82.0"
